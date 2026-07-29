@@ -219,3 +219,60 @@ next win, and it is cheap to test.
 3. **MoE end-to-end** — now justified, but fix expert 0's 3.5x
    oversized shard first or that expert reproduces the full-corpus
    failure.
+
+---
+
+## RESULT 2: positional encoding was the real bottleneck (2026-07-29)
+
+Predicted from the *shape* of the failure — answers that start correct and
+degrade after 13-28 characters are failing **positionally**, not from lack
+of capacity. Learned absolute PE added; nothing else changed (same shard,
+same lr, same 12,000 steps, same seed).
+
+| | no-PE | with-PE |
+|---|---|---|
+| eval loss | 0.5001 | **0.1906** |
+| mean exact prefix (38 questions) | 11.9 ch | **35.9 ch** |
+| **exact complete-answer match** | **0/38 (0%)** | **36/38 (95%)** |
+| per-question | — | 37 better, 1 worse, 0 tied |
+
+She does not degrade any more. She finishes the sentence:
+
+```
+"Who is Zelda?"   -> "Princess Zelda guards the Triforce of Wisdom."   EXACT
+"Who is Malon?"   -> "Malon sings at Lon Lon Ranch for the horses."    EXACT
+"Who is Link?"    -> "Link is the hero chosen by the Triforce."        EXACT
+"Who is Saria?"   -> "Saria holds the sacred Forest Medallion."        EXACT
+```
+
+**Cost on the target**: 4 KB ROM (0.1% of a 4MB cart), +3.6% parameters
+(114,688 -> 118,784), and 64 extra adds per token — about 512 of the
+127,840 cycles in a frame. For a 2.6x loss improvement and 0% -> 95%
+answer accuracy.
+
+**Absolute, not RoPE or ALiBi** — and the choice paid twice. RoPE needs
+per-dimension multiplies a 68000 cannot afford; ALiBi needs each cached
+slot's age. Absolute PE is 64 adds *and* it **preserves the KV ring
+buffer**: position is baked into each K/V at store time, so the attention
+sum stays order-invariant over the cached set and overwriting the oldest
+slot is still exactly equivalent. We keep the 16KB-memmove-per-token
+saving that PE was expected to cost us.
+
+### What this reorders
+
+- **Segmented speech (SEGMENTED_SPEECH.md) is no longer the shipping
+  path.** The decision rule said: if PE lifts prefix well past 12
+  characters, segmentation becomes optional polish. It went to 35.9 with
+  95% complete answers. V3 (multi-answer stitching) stays worth doing for
+  *flavour* — her elaborating in several sentences — not as a workaround.
+- **Real Top-K is now worth re-measuring.** The retracted result was
+  invalid anyway, and the stated prerequisite for the collapse to work was
+  exactly this: something for attention to select *between*. With PE the
+  model has position to key on. Re-run the sweep with the fixed
+  implementation.
+- **The MoE case is unchanged but the bar moved.** Sharding gave
+  1.0 -> 11.9 ch; PE gave 11.9 -> 35.9 ch on top. Both are real and they
+  compose. The full-corpus + PE run is now the control that matters:
+  it may be that PE alone recovers most of the quality and sharding
+  buys capacity for *more content* rather than for basic coherence.
+  **Run full-corpus + PE before building the MoE.**

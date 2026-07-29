@@ -1,26 +1,26 @@
 [
   {
     "prompt": "Who are you?: ",
-    "expect": "The kinge mets computer f 1979.\n"
+    "expect": "Ganondorf craves the Triforce of Power.\n"
   },
   {
     "prompt": "What is your name?: ",
-    "expect": "About kst xpe ode bof wof e.\n"
+    "expect": "A miga, king of 1980s home PCs.\n"
   },
   {
     "prompt": "Where are you from?: ",
-    "expect": "Aquatichate Zope ma, beof 1979.\n"
+    "expect": "Ganondorf craves the Triforce of Power.\n"
   },
   {
     "prompt": "What is your purpose?: ",
-    "expect": "oof of antiqua's Old sild harnextres sthe sthe sewares.\n"
+    "expect": "Zeldar.\n"
   },
   {
     "prompt": "What is RustChain?: ",
-    "expect": "Elyan Labs blockchain for vil ge childwa chinte chinte mps.\n"
+    "expect": "Old silicon earns extra bonuses.\n"
   },
   {
     "prompt": "Tell me of the realm.: ",
-    "expect": "the sasanodes.\n"
+    "expect": "banes companinin.\n"
   }
 ]
