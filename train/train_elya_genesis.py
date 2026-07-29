@@ -32,6 +32,14 @@ import os as _os
 LR         = float(_os.environ.get("EG_LR", "5e-4"))
 PIN_W      = float(_os.environ.get("EG_PIN", "1e-2"))
 QA_REPEAT  = int(_os.environ.get("EG_QA_REPEAT", "1200"))
+# EG_LEVELS=1 -> ternary {-1,0,+1} (BitNet b1.58 style)
+# EG_LEVELS=2 -> quinary {-2,-1,0,+1,+2}: the SAME scale with a wider
+#   clamp, so only the LARGE weights (~top 20%) get magnitude 2. This
+#   costs no format change at all - in the SGT2 index-stream layout a
+#   magnitude-2 weight is simply its index listed twice, and the engine
+#   already sums duplicates correctly. It buys precision exactly where
+#   ternary throws it away: on the weights that matter most.
+LEVELS = int(_os.environ.get("EG_LEVELS", "1"))
 
 HERE = Path(__file__).resolve().parent
 OUT_BIN = HERE.parent / "res" / "elya_genesis.bin"
@@ -97,7 +105,7 @@ class TernaryLinear(nn.Module):
     def quantized(self):
         w = self.weight
         s = w.abs().mean().clamp(min=1e-5)
-        wq = (w / s).round().clamp(-1, 1)
+        wq = (w / s).round().clamp(-LEVELS, LEVELS)
         return wq, s
 
     def forward(self, x):
@@ -266,6 +274,10 @@ def pack_ternary(wq_np):
     return b.astype(np.uint8).tobytes()
 
 def pack_index_streams(wq_np):
+    """Magnitude>1 weights are emitted as REPEATED indices: a weight of
+    +2 at position i appears twice in the add list. No format change, no
+    engine change - eg_matvec just adds in[i] twice. Cost is proportional
+    to sum|w| rather than count(w != 0)."""
     """SGT2 'T2' layout: per output row, an explicit list of activation
     indices to ADD and to SUBTRACT. The 68000 inner loop becomes
     `MOVE.B (A1)+,D0 ; ADD.W (A2,D0.W),D2` — no bit unpacking, no branch
@@ -277,19 +289,27 @@ def pack_index_streams(wq_np):
     in_dim <= 256 so every index fits a byte."""
     out = bytearray()
     for row in wq_np:
-        adds = np.nonzero(row > 0)[0].astype(np.uint8)
-        subs = np.nonzero(row < 0)[0].astype(np.uint8)
+        adds = np.repeat(np.nonzero(row > 0)[0],
+                         row[row > 0].astype(int)).astype(np.uint8)
+        subs = np.repeat(np.nonzero(row < 0)[0],
+                         (-row[row < 0]).astype(int)).astype(np.uint8)
         out += struct.pack(">HH", len(adds), len(subs))
         out += adds.tobytes()
         out += subs.tobytes()
     return bytes(out)
 
 def requant(s):
-    """out_q12 = (acc_q12 * M) >> S  ≈ acc_q12 * s, with M ≤ 127 (int32-safe)."""
+    """out_q12 = (acc_q12 * M) >> S  ~= acc_q12 * s.
+
+    M is capped so that acc*M cannot overflow int32 on the 68000:
+      max|acc| = in_dim * 32767 * LEVELS = 256 * 32767 * LEVELS
+    With LEVELS=1, M<=127 uses 50% of int32. With LEVELS=2 it would use
+    99.2% -- no margin at all -- so the cap halves to 63."""
+    m_cap = 127 if LEVELS == 1 else 63
     S = 0
-    while s * (1 << (S + 1)) <= 127 and S < 24:
+    while s * (1 << (S + 1)) <= m_cap and S < 24:
         S += 1
-    M = max(1, min(127, round(s * (1 << S))))
+    M = max(1, min(m_cap, round(s * (1 << S))))
     return M, S
 
 buf = bytearray()
@@ -311,8 +331,12 @@ for li, blk in enumerate(model.blocks):
         buf += struct.pack(">HBB", M, S, 0)
         buf += pack_index_streams(wq_np)
         nz = int((wq_np != 0).sum())
+        mag2 = int((np.abs(wq_np) > 1).sum())
+        work = int(np.abs(wq_np).sum())          # adds actually emitted
         print(f"  L{li}.{name}: s={float(s):.5f} M={M} S={S} "
-              f"nonzero={100*nz/wq_np.size:.0f}%")
+              f"nonzero={100*nz/wq_np.size:.0f}% "
+              f"mag2={100*mag2/wq_np.size:.0f}% "
+              f"adds/weight={work/wq_np.size:.2f}")
 
 lut = np.array([round(16384 * math.exp(-i / 16.0)) for i in range(256)],
                dtype=">u2")

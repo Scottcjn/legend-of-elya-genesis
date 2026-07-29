@@ -201,3 +201,60 @@ DMA from the V-int callback.
   lookups are not free on a cacheless 68000.
 - HInt timeslicing *as a speed optimization* — it improves responsiveness,
   it does not add throughput.
+
+---
+
+## Beyond ternary: quinary weights for free (EG_LEVELS=2)
+
+Scott's proposal, and the format makes it nearly free.
+
+The obvious reading of "4-state" is 2-bit codes `{00,01,10,11}` with the
+reserved 4th code carrying a magnitude-2 weight. But **SGT2 does not
+store codes at all** — it stores lists of indices to add and subtract. So
+a weight of magnitude 2 is simply **its index listed twice**:
+
+```
+row := u16 n_add, u16 n_sub, add indices..., sub indices...
+       a weight of +2 at position i  ->  i appears twice in the add list
+```
+
+`eg_matvec` already sums duplicates correctly. **Zero engine changes.**
+This also means the format is not limited to 4 or 5 states at all — any
+small-integer weight works, at a cost proportional to `sum|w|` rather
+than `count(w != 0)`.
+
+**Quantization**: keep the same absmean scale as ternary, widen the
+clamp to ±2. Only the largest ~20% of weights become magnitude 2, so the
+extra work is modest while the precision lands exactly where ternary
+throws it away — on the weights that matter most.
+
+⚠️ **Overflow, and why M is capped lower.** The int32 accumulator bound is
+`in_dim * 32767 * LEVELS * M`:
+
+| | acc_max × M | fraction of int32 |
+|---|---|---|
+| ternary, M ≤ 127 | 1,065,320,704 | 50% |
+| magnitude-2, M ≤ 127 | 2,130,641,408 | **99.2% — unsafe** |
+| magnitude-2, M ≤ 63 | 1,056,932,352 | 49% |
+
+So `requant()` caps M at 63 when `EG_LEVELS=2`. Missing this would be a
+silent wrong-answer bug on the 68000 only under large activations — the
+worst kind.
+
+**Why this matters scientifically.** The rigor audit raised a rival
+hypothesis to the capacity story: the model may be stuck at a **ternary
+QAT noise floor**, not a parameter ceiling. Evidence for it — the ternary
+model plateaus at 0.97-1.06 across five hyperparameter sweeps, while the
+N64's Q8 model reaches 0.225 on essentially the same corpus and speaks
+coherently.
+
+Quinary is the direct test of that hypothesis, and it is *orthogonal* to
+the MoE test:
+
+| single-shard result | quinary result | conclusion |
+|---|---|---|
+| speaks | — | capacity was the limit; MoE is right |
+| babbles | speaks | **quantization floor** was the limit, not capacity |
+| babbles | babbles | something else is wrong; stop adding levers |
+
+Run both before drawing conclusions from either.
