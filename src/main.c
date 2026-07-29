@@ -888,7 +888,10 @@ static void startPrompt(u16 idx)
     mwState = 1;                  /* thinking */
     runVisible = TRUE;
     clearDialog();
-    VDP_drawText("Elya dreams", 2, 27);
+    SYS_disableInts();
+    VDP_clearTextArea(0, 27, 40, 1);
+    VDP_drawText("Elya dreams...", 13, 27);
+    SYS_enableInts();
     /* echo the question in the dialog box */
     for (const char *p = curPrompt; *p; p++) putGlyph(*p);
     putGlyph('\n');
@@ -961,7 +964,10 @@ int main(bool hardReset)
 
     if (eg_init(&elya, (const uint8_t *)elya_weights) == 0) {
         engineOk = TRUE;
+        SYS_disableInts();
+        VDP_clearTextArea(0, 27, 40, 1);
         VDP_drawText("UP/DOWN choose   A ask", 9, 27);
+        SYS_enableInts();
         showSelected(promptIdx);
     } else {
         VDP_drawText("WEIGHTS MISSING - STUB ROM", 7, 26);
@@ -1018,6 +1024,10 @@ int main(bool hardReset)
                 runVisible = FALSE;
                 setMouth(MOUTH_CLOSED);
                 showSelected(promptIdx);
+                SYS_disableInts();
+                VDP_clearTextArea(0, 27, 40, 1);
+                VDP_drawText("UP/DOWN choose   A ask", 9, 27);
+                SYS_enableInts();
                 break;
             }
             putGlyph((char)lastTok);
