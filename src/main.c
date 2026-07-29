@@ -164,7 +164,8 @@ static void setMouth(u16 m)
 #define DC_GLOW2  7
 
 static u32 dsTiles[DS_NTILES * 8];
-static vu32 dsFrame = 0;
+static vu16 dsFrame = 0;
+static s16  dsRowPos[FLOOR_ROWS];   /* incremental scroll accumulators */
 static s16 dsScroll[FLOOR_ROWS * 8];
 
 static void dsSetPix(u16 tile, u16 x, u16 y, u16 c)
@@ -263,15 +264,76 @@ static void buildDreamMap(void)
     }
 }
 
+/* ------------------------------------------------------------------ */
+/* TOKEN RAIN — her thoughts falling through the dream.                */
+/* Columns of glyphs drift down BG_B at per-column speeds via          */
+/* VSCROLL_COLUMN (20 two-cell entries in H40). The tilemap is filled  */
+/* once and never rewritten; ALL motion is VSRAM writes, so it costs   */
+/* no VRAM and no DMA. When Elya emits a token, that ACTUAL character  */
+/* is written into the top of a column: the background is made of her  */
+/* own output, raining down behind her.                                */
+/* ------------------------------------------------------------------ */
+#define RAIN_COLS 16                 /* power of 2: no division anywhere */
+static s16 rainPos[RAIN_COLS];       /* Q12.4 accumulators */
+static s16 rainVS[RAIN_COLS];
+static const s16 rainSpd[RAIN_COLS] = { 3,7,2,5,11,4,9,6,13,3,8,2,10,5,7,4 };
+static u16 rainCol = 0;
+
+static void rainInit(void)
+{
+    /* BG_A carries her face, the dialog and the text — it must NOT move.
+     * VSCROLL_COLUMN is global to both planes, so zero A's entries once. */
+    static s16 zeroVS[20];
+    memset(zeroVS, 0, sizeof(zeroVS));
+    VDP_setVerticalScrollTile(BG_A, 0, zeroVS, 20, CPU);
+
+    /* seed the columns with faint glyphs so the rain exists before she
+     * has said anything (PAL0 = the dim text palette) */
+    for (u16 c = 0; c < RAIN_COLS; c++) {
+        for (u16 row = 0; row < 28; row++) {
+            u16 h = (u16)(c * 37 + row * 17);
+            if ((h & 7) != 0) continue;
+            u16 t = TILE_FONT_INDEX + (h % 60);
+            VDP_setTileMapXY(BG_B, TILE_ATTR_FULL(PAL0, FALSE, FALSE, FALSE, t),
+                             c * 2, row);
+        }
+    }
+}
+
+/* called once per generated token — the dream rains what she just said */
+static void rainDropToken(u8 tok)
+{
+    if (tok < 32 || tok > 126) return;
+    u16 row = (u16)((0 - (rainPos[rainCol] >> 7)) - 1) & 31;
+    u16 t = TILE_FONT_INDEX + (tok - 32);
+    VDP_setTileMapXY(BG_B, TILE_ATTR_FULL(PAL1, FALSE, FALSE, FALSE, t),
+                     rainCol * 2, row);
+    VDP_setTileMapXY(BG_B, TILE_ATTR_FULL(PAL1, FALSE, FALSE, FALSE, t),
+                     rainCol * 2 + 1, row);
+    rainCol = (rainCol + 7) & (RAIN_COLS - 1);   /* stride 7, never adjacent */
+}
+
 /* runs every vblank — the dream animates even while Elya thinks */
 static void dreamscapeVInt(void)
 {
     dsFrame++;
 
-    /* floor: lower scanlines scroll faster = perspective illusion */
+    /* token rain: 16 adds + one 16-word VSRAM write, ~600 cycles */
+    for (u16 c = 0; c < RAIN_COLS; c++) {
+        rainPos[c] = (s16)(rainPos[c] + rainSpd[c]);
+        rainVS[c]  = (s16)(rainPos[c] >> 4);
+    }
+    VDP_setVerticalScrollTile(BG_B, 0, rainVS, RAIN_COLS, CPU);
+
+    /* Floor: lower scanlines scroll faster = perspective illusion.
+     * dsFrame is u16 and the accumulators are incremental — a 32-bit
+     * multiply here would call the Sozobon lmul helper 12x per frame
+     * (~3000-4800 cycles, ~4% of the frame, stolen straight from
+     * inference). Incremental adds cost nothing. */
     u16 i = 0;
     for (u16 r = 0; r < FLOOR_ROWS; r++) {
-        s16 v = -(s16)((dsFrame * (r + 3)) >> 3);
+        dsRowPos[r] = (s16)(dsRowPos[r] - (s16)(r + 3));
+        s16 v = (s16)(dsRowPos[r] >> 3);
         for (u16 l = 0; l < 8; l++) dsScroll[i++] = v;
     }
     VDP_setHorizontalScrollLine(BG_B, FLOOR_ROW * 8, dsScroll,
@@ -303,13 +365,14 @@ static void initDreamscape(void)
     buildDreamMap();
 
     /* per-line hscroll; BG_A stays put (zeroed table) */
-    VDP_setScrollingMode(HSCROLL_LINE, VSCROLL_PLANE);
+    VDP_setScrollingMode(HSCROLL_LINE, VSCROLL_COLUMN);
     {
         static s16 zeros[224];
         memset(zeros, 0, sizeof(zeros));
         VDP_setHorizontalScrollLine(BG_A, 0, zeros, 224, CPU);
         VDP_setHorizontalScrollLine(BG_B, 0, zeros, 224, CPU);
     }
+    rainInit();
     SYS_setVIntCallback(dreamscapeVInt);
 }
 
@@ -482,6 +545,7 @@ int main(bool hardReset)
                 break;
             }
             putGlyph((char)lastTok);
+            rainDropToken(lastTok);     /* the dream rains what she says */
             genCount++;
             genTokens++;
             /* vowels open wide — she speaks as she thinks */

@@ -14,6 +14,22 @@ static uint16_t rd16be(const uint8_t *p) {
     return (uint16_t)((p[0] << 8) | p[1]);
 }
 
+/* 16x16 -> 32 signed multiply.
+ * The 68000 HAS MULS.W (70 cycles) but no 32x32 multiply, so any C
+ * expression GCC believes is 32-bit becomes a __mulsi3 call: three
+ * MULUs plus call overhead, ~250 cycles. GCC will not always narrow a
+ * value it has tracked through a 32-bit division, so we say it
+ * outright. The host path is plain C, keeping both builds identical. */
+static inline int32_t mul_ss(int16_t a, int16_t b) {
+#if defined(__m68k__) && !defined(__mcoldfire__)
+    int32_t r = a;
+    __asm__ ("muls.w %1,%0" : "+d"(r) : "dm"(b));
+    return r;
+#else
+    return (int32_t)a * (int32_t)b;
+#endif
+}
+
 static int16_t sat16(int32_t v) {
     if (v > 32767)  return 32767;
     if (v < -32768) return -32768;
@@ -86,15 +102,19 @@ static void eg_rmsnorm(int16_t *x, int16_t n)
     uint32_t ss = 0;
     for (int16_t i = 0; i < n; i++) {
         int16_t h = (int16_t)(x[i] >> 4);          /* Q8 */
-        ss += (uint32_t)((int32_t)h * h);          /* Q16 */
+        ss += (uint32_t)(h * h);                   /* Q16, MULS.W */
     }
     uint32_t ms = ss / (uint16_t)n;                /* mean square, Q16 */
     uint16_t rms = isqrt32(ms);                    /* Q8 */
     if (rms == 0) rms = 1;
-    int32_t r = (int32_t)(1UL << 18) / rms;        /* Q10 reciprocal */
-    if (r > 16383) r = 16383;                      /* max gain 16x   */
+    int32_t r32 = (int32_t)(1UL << 18) / rms;      /* Q10 reciprocal */
+    if (r32 > 16383) r32 = 16383;                  /* max gain 16x   */
+    /* r fits 16 bits after the clamp: keeping it int16_t lets the 68000
+     * use a single MULS.W instead of the __mulsi3 helper (3x MULU +
+     * call overhead) on every one of the 320 products per token. */
+    int16_t r = (int16_t)r32;
     for (int16_t i = 0; i < n; i++)
-        x[i] = sat16(((int32_t)x[i] * r) >> 10);
+        x[i] = sat16(mul_ss(x[i], r) >> 10);
 }
 
 /* ---- static scratch (keep the 68K stack small) ------------------------ */
@@ -102,7 +122,10 @@ static int16_t s_q[EG_EMBED], s_k[EG_EMBED], s_v[EG_EMBED];
 static int16_t s_attn[EG_EMBED], s_proj[EG_EMBED], s_res[EG_EMBED];
 static int16_t s_ff[EG_FFN];
 static int32_t s_score[EG_CTX];
-static int32_t s_selsc[EG_CTX];   /* collapse survivors: scores  */
+/* survivor weights are Q14 exp-LUT values (<= 16384) so they fit int16_t;
+ * that keeps the V mixdown a single MULS.W per term on 68000 rather than
+ * a __mulsi3 call. */
+static int16_t s_selsc[EG_CTX];   /* collapse survivors: weights */
 static int16_t s_selix[EG_CTX];   /* collapse survivors: indices */
 
 /* ---- one transformer layer --------------------------------------------
@@ -144,7 +167,7 @@ static void eg_layer(EgState *st, int16_t li, int16_t slot, int16_t n_ctx)
             const int8_t *kh = st->kc[li][tt] + off;
             int32_t sc = 0;
             for (int16_t d = 0; d < EG_HD; d++)
-                sc += (int32_t)qh[d] * kh[d];
+                sc += mul_ss(qh[d], (int16_t)kh[d]);
             sc >>= 2;
             s_score[tt] = sc;
             if (sc > mx) mx = sc;
@@ -164,20 +187,21 @@ static void eg_layer(EgState *st, int16_t li, int16_t slot, int16_t n_ctx)
             if (d > 155) continue;              /* exp(-9.7) -> 0 in Q14 */
             uint16_t w = rd16be(st->explut + (d << 1));
             if (w == 0) continue;
-            s_selsc[nsel] = (int32_t)w;
+            s_selsc[nsel] = (int16_t)w;            /* Q14, <= 16384 */
             s_selix[nsel] = tt;
             sum += w;
             if (++nsel >= EG_TOPK) break;
         }
-        if (sum == 0) { s_selsc[0] = 1; sum = 1; }
+        if (sum == 0) { s_selsc[0] = 1; s_selix[0] = 0; nsel = 1; sum = 1; }
         int32_t sum8 = sum >> 8;                   /* out = num/(sum>>8) */
         if (sum8 == 0) sum8 = 1;
 
-        /* weighted V sum over survivors: EG_TOPK terms, not n_ctx */
+        /* weighted V sum over survivors. int16 x int8 keeps this a
+         * single MULS.W per term on 68000. */
         for (int16_t d = 0; d < EG_HD; d++) {
             int32_t num = 0;
             for (int16_t s = 0; s < nsel; s++)
-                num += s_selsc[s] * st->vc[li][s_selix[s]][off + d];
+                num += mul_ss(s_selsc[s], (int16_t)st->vc[li][s_selix[s]][off + d]);
             s_attn[off + d] = sat16(num / sum8);
         }
     }
