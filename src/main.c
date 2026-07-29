@@ -165,6 +165,12 @@ static void setMouth(u16 m)
 #define DC_GLOW1  6
 #define DC_GLOW2  7
 
+/* the Mind Window lives further down but is driven from the VBlank
+ * callback and from init, both of which appear before it */
+static void mwInit(void);
+static void mwAnimate(u16 frame);
+static void mwSetExpert(u16 e);
+
 static u32 dsTiles[DS_NTILES * 8];
 static vu16 dsFrame = 0;
 static s16  dsRowPos[FLOOR_ROWS];   /* incremental scroll accumulators */
@@ -328,6 +334,8 @@ static void dreamscapeVInt(void)
 {
     dsFrame++;
 
+    mwAnimate((u16)dsFrame);      /* the mind keeps ticking while she thinks */
+
     /* token rain: 16 adds + one 16-word VSRAM write, ~600 cycles */
     for (u16 c = 0; c < RAIN_COLS; c++) {
         rainPos[c] = (s16)(rainPos[c] + rainSpd[c]);
@@ -383,6 +391,7 @@ static void initDreamscape(void)
         VDP_setHorizontalScrollLine(BG_B, 0, zeros, 224, CPU);
     }
     rainInit();
+    mwInit();
     SYS_setVIntCallback(dreamscapeVInt);
 }
 
@@ -458,6 +467,208 @@ static void putGlyph(char c)
     if (col >= DIALOG_W) { col = 0; rowY++; }
 }
 
+/* ================================================================== */
+/* THE THINKING WINDOW                                                */
+/* A little framed panel beside Elya showing which part of her mind   */
+/* is active and what it is doing. Sega-flavoured chunky 8x8 icons,   */
+/* drawn procedurally like her face (no art pipeline needed).         */
+/*                                                                    */
+/* Icons live in their own tile block; only the two tilemap entries   */
+/* that change are rewritten, so an update is 4 bytes of VRAM.        */
+/* ================================================================== */
+#define TW_TILE_INDEX (DS_TILE_INDEX + DS_NTILES)
+#define TW_NICONS 10
+/* expert icons (index == expert id, matching train/experts.py order) */
+#define TWI_IDENTITY  0   /* a face          */
+#define TWI_QUEST     1   /* a sword         */
+#define TWI_RUSTCHAIN 2   /* a coin          */
+#define TWI_HARDWARE  3   /* a chip          */
+/* state icons */
+#define TWI_IDLE      4   /* dim dot         */
+#define TWI_THINK1    5   /* spinner frame 1 */
+#define TWI_THINK2    6   /* spinner frame 2 */
+#define TWI_THINK3    7   /* spinner frame 3 */
+#define TWI_SPEAK1    8   /* sound waves     */
+#define TWI_SPEAK2    9
+
+#define TW_X 26           /* tile coords of the panel */
+#define TW_Y 6
+
+static u32 mwTiles[TW_NICONS * 8];
+
+static void mwPix(u16 tile, u16 x, u16 y, u16 c)
+{
+    u32 *row = &mwTiles[tile * 8 + y];
+    u16 sh = (7 - x) * 4;
+    *row = (*row & ~((u32)0xF << sh)) | ((u32)c << sh);
+}
+
+/* draw an 8x8 icon from a compact string map: '.'=clear, digits=color */
+static void mwGlyph(u16 tile, const char *rows)
+{
+    for (u16 y = 0; y < 8; y++)
+        for (u16 x = 0; x < 8; x++) {
+            char ch = rows[y * 8 + x];
+            if (ch != '.') mwPix(tile, x, y, (u16)(ch - '0'));
+        }
+}
+
+static void mwBuildIcons(void)
+{
+    memset(mwTiles, 0, sizeof(mwTiles));
+    /* palette here is PAL1 (Elya's): 1 skin 2 hair 3 hairD 4 eye
+     * 5 mouth 6 outline 7 blush */
+    mwGlyph(TWI_IDENTITY,                    /* a little face          */
+        "..6666.."
+        ".622226."
+        "6241422."
+        "6222226."
+        "6255526."
+        ".622226."
+        "..6666.."
+        "........");
+    mwGlyph(TWI_QUEST,                       /* a sword                */
+        "....6..."
+        "...646.."
+        "...646.."
+        "...646.."
+        ".6666666"
+        "...646.."
+        "...66..."
+        "....6...");
+    mwGlyph(TWI_RUSTCHAIN,                   /* a coin                 */
+        "..6666.."
+        ".644446."
+        "6474474."
+        "6447744."
+        "6447744."
+        "6474474."
+        ".644446."
+        "..6666..");
+    mwGlyph(TWI_HARDWARE,                    /* a chip with legs       */
+        ".6.66.6."
+        "66666666"
+        "64444446"
+        "64744746"
+        "64444446"
+        "66666666"
+        ".6.66.6."
+        "........");
+    mwGlyph(TWI_IDLE,
+        "........"
+        "........"
+        "...66..."
+        "..6336.."
+        "..6336.."
+        "...66..."
+        "........"
+        "........");
+    /* three-frame spinner: she is thinking */
+    mwGlyph(TWI_THINK1,
+        "...44..."
+        "..4444.."
+        "...44..."
+        "........"
+        "........"
+        "...33..."
+        "..3333.."
+        "...33...");
+    mwGlyph(TWI_THINK2,
+        "........"
+        "......44"
+        ".....444"
+        "........"
+        "........"
+        "333....."
+        "33......"
+        "........");
+    mwGlyph(TWI_THINK3,
+        "........"
+        "........"
+        "44......"
+        "444....."
+        ".....333"
+        "......33"
+        "........"
+        "........");
+    /* speaking: sound waves radiating */
+    mwGlyph(TWI_SPEAK1,
+        "...5...."
+        "..55.7.."
+        ".555..7."
+        ".555.7.7"
+        ".555.7.7"
+        ".555..7."
+        "..55.7.."
+        "...5....");
+    mwGlyph(TWI_SPEAK2,
+        "...5...."
+        "..55...."
+        ".555.7.."
+        ".555.7.."
+        ".555.7.."
+        ".555.7.."
+        "..55...."
+        "...5....");
+    VDP_loadTileData(mwTiles, TW_TILE_INDEX, TW_NICONS, DMA);
+}
+
+static u16 mwExpert = 0;      /* which expert is active   */
+static u16 mwState  = 0;      /* 0 idle, 1 thinking, 2 speaking */
+
+static void mwPut(u16 icon, u16 cx, u16 cy)
+{
+    SYS_disableInts();
+    VDP_setTileMapXY(BG_A, TILE_ATTR_FULL(PAL1, TRUE, FALSE, FALSE,
+                     TW_TILE_INDEX + icon), cx, cy);
+    SYS_enableInts();
+}
+
+static const char *TW_NAMES[4] = { "SELF", "QUEST", "CHAIN", "IRON" };
+
+static void mwInit(void)
+{
+    mwBuildIcons();
+    SYS_disableInts();
+    VDP_drawText("MIND", TW_X + 1, TW_Y - 2);
+    for (u16 x = 0; x < 6; x++) {
+        VDP_drawText("-", TW_X + x, TW_Y - 1);
+        VDP_drawText("-", TW_X + x, TW_Y + 4);
+    }
+    SYS_enableInts();
+    mwPut(TWI_IDENTITY, TW_X + 1, TW_Y + 1);
+    mwPut(TWI_IDLE,     TW_X + 3, TW_Y + 1);
+    SYS_disableInts();
+    VDP_drawText(TW_NAMES[0], TW_X, TW_Y + 3);
+    SYS_enableInts();
+}
+
+/* called when the router picks an expert (or at prompt start for now) */
+static void mwSetExpert(u16 e)
+{
+    if (e > 3) e = 0;
+    mwExpert = e;
+    mwPut(TWI_IDENTITY + e, TW_X + 1, TW_Y + 1);
+    SYS_disableInts();
+    VDP_clearTextArea(TW_X, TW_Y + 3, 6, 1);
+    VDP_drawText(TW_NAMES[e], TW_X, TW_Y + 3);
+    SYS_enableInts();
+}
+
+/* animated from the VBlank callback so the mind keeps ticking even
+ * while the 68000 is deep inside a forward pass */
+static void mwAnimate(u16 frame)
+{
+    u16 icon;
+    if (mwState == 1)                                  /* thinking */
+        icon = TWI_THINK1 + ((frame >> 3) % 3);
+    else if (mwState == 2)                             /* speaking */
+        icon = TWI_SPEAK1 + ((frame >> 3) & 1);
+    else
+        icon = TWI_IDLE;
+    mwPut(icon, TW_X + 3, TW_Y + 1);
+}
+
 static void drawTokSpeed(void)
 {
     char buf[24];
@@ -478,7 +689,16 @@ static void startPrompt(u16 idx)
     genCount = 0;
     genStart = vtimer;
     genTokens = 0;
+    /* Lock-On MoE: pick which part of her mind answers this. With a
+     * single-expert blob eg_route returns 0 and this is a no-op, so the
+     * Mind Window still shows the right thing either way. */
+    {
+        u16 e = eg_route(&elya, curPrompt);
+        eg_select_expert(&elya, e);
+        mwSetExpert(e);
+    }
     mode = ST_FEED;
+    mwState = 1;                  /* thinking */
     clearDialog();
     VDP_drawText("Elya dreams", 2, 27);
     /* echo the question in the dialog box */
@@ -589,6 +809,7 @@ int main(bool hardReset)
             setMouth((++blink & 1) ? MOUTH_OPEN : MOUTH_CLOSED); /* pondering */
             if (curPrompt[feedPos] == 0) {
                 mode = ST_GEN;
+                mwState = 2;      /* speaking */
                 genCount = 0;
             }
             drawTokSpeed();
@@ -598,6 +819,7 @@ int main(bool hardReset)
             if (lastTok == '\n' || genCount >= MAX_GEN
                 || rowY >= DIALOG_H) {
                 mode = ST_IDLE;
+                mwState = 0;      /* idle */
                 setMouth(MOUTH_CLOSED);
                 VDP_drawText("PRESS A: ask Elya", 2, 27);
                 break;
