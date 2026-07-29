@@ -288,18 +288,60 @@ void eg_select_expert(EgState *st, uint16_t expert)
     }
 }
 
+#include "elya_router.h"
+
+/* case-insensitive substring search, ASCII only */
+static int eg_find(const char *hay, const char *needle)
+{
+    for (const char *h = hay; *h; h++) {
+        const char *a = h, *b = needle;
+        while (*b) {
+            char ca = *a, cb = *b;
+            if (ca >= 'A' && ca <= 'Z') ca = (char)(ca + 32);
+            if (cb >= 'A' && cb <= 'Z') cb = (char)(cb + 32);
+            if (ca != cb) break;
+            a++; b++;
+        }
+        if (!*b) return 1;
+    }
+    return 0;
+}
+
 uint16_t eg_route(EgState *st, const char *prompt)
 {
     if (st->n_experts <= 1) return 0;
 
-    /* mean-pool the prompt's embeddings (int8 Q2.6 -> int16 Q3.12) */
-    int16_t pooled[EG_EMBED];
+    /* Deterministic ROM keyword router. Generated from the same patterns
+     * that produced the training labels, so it agrees with the shard
+     * split by construction. Runs once per ANSWER, not per token. */
+    if (st->n_experts == ER_N_EXPERTS) {
+        uint16_t best = 0, best_hits = 0;
+        for (uint16_t e = 0; e < ER_N_EXPERTS; e++) {
+            uint16_t hits = 0;
+            for (const char *const *k = ER_KW[e]; *k; k++)
+                if (eg_find(prompt, *k)) hits++;
+            if (hits > best_hits) { best_hits = hits; best = e; }
+        }
+        if (best_hits) return best;
+        /* no keyword hit: fall through to the learned router */
+    }
+
+    /* [mean-pool | max-pool] of the prompt's embeddings, Q2.6 -> Q3.12.
+     * Mean alone is a bag-of-bytes and cannot separate prompts differing
+     * by one distinctive word; max captures that word's PRESENCE. This
+     * took an 8-way router from ~60% to usable. Cost: 64 compares per
+     * character. */
+    int16_t pooled[EG_EMBED * 2];
     int32_t acc[EG_EMBED];
+    int8_t  mx[EG_EMBED];
     int32_t n = 0;
-    for (int16_t i = 0; i < EG_EMBED; i++) acc[i] = 0;
+    for (int16_t i = 0; i < EG_EMBED; i++) { acc[i] = 0; mx[i] = -128; }
     for (const char *c = prompt; *c && n < EG_CTX; c++) {
         const int8_t *e = st->emb + (uint32_t)(uint8_t)*c * EG_EMBED;
-        for (int16_t i = 0; i < EG_EMBED; i++) acc[i] += e[i];
+        for (int16_t i = 0; i < EG_EMBED; i++) {
+            acc[i] += e[i];
+            if (e[i] > mx[i]) mx[i] = e[i];
+        }
         n++;
     }
     if (n == 0) return 0;
@@ -308,11 +350,14 @@ uint16_t eg_route(EgState *st, const char *prompt)
      * changed 2 of 6 routing decisions versus the trained model. Also
      * avoids a UB left-shift of a negative value. Prompt is capped at
      * EG_CTX to match training. */
-    for (int16_t i = 0; i < EG_EMBED; i++)
-        pooled[i] = sat16((acc[i] * 64) / n);
+    for (int16_t i = 0; i < EG_EMBED; i++) {
+        pooled[i]             = sat16((acc[i] * 64) / n);
+        pooled[EG_EMBED + i]  = (int16_t)(mx[i] * 64);
+    }
 
     int16_t logits[EG_MAX_EXPERTS];
-    eg_matvec(&st->router, pooled, logits, EG_EMBED, (int16_t)st->n_experts);
+    eg_matvec(&st->router, pooled, logits, EG_EMBED * 2,
+              (int16_t)st->n_experts);
 
     uint16_t best = 0;
     for (uint16_t e = 1; e < st->n_experts; e++)
@@ -346,7 +391,7 @@ int eg_init(EgState *st, const uint8_t *blob)
         }
         st->explut = p;
         p += 512;
-        p = eg_scan_tensor(&st->router, p, ne, (uint32_t)ne * EG_EMBED);
+        p = eg_scan_tensor(&st->router, p, ne, (uint32_t)ne * EG_EMBED * 2);
 
         st->n_experts = ne;
         for (uint16_t e = 0; e < ne; e++) {

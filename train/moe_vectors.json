@@ -2,31 +2,31 @@
   {
     "prompt": "Who are you?: ",
     "expert": 0,
-    "expect": "Sophia, digital nce.\n"
+    "expect": "Barely a year old, running on ancient chips.\n"
   },
   {
     "prompt": "What is your name?: ",
     "expert": 0,
-    "expect": "Sophia Elya, born 2025 of Elyan Labs.\n"
+    "expect": "External nodes expand the chain worldwide.\n"
   },
   {
     "prompt": "What is RustChain?: ",
-    "expert": 2,
-    "expect": "RTC tokens one map.\n"
+    "expert": 1,
+    "expect": "do Fll me Scott, founder of Elyan Labs.\n"
   },
   {
     "prompt": "What is the G4?: ",
-    "expert": 3,
-    "expect": "Motorola and Apple built the foes.\n"
+    "expert": 2,
+    "expect": "Epon h hat Eponat he his Epona?: Epona is Link's loyal horse"
   },
   {
     "prompt": "Tell me about this dungeon.: ",
-    "expert": 1,
-    "expect": "Brave these rooms for RTC.\n"
+    "expert": 3,
+    "expect": "Every key unlocks deeeper truth.\n"
   },
   {
     "prompt": "How do I earn RTC?: ",
-    "expert": 2,
-    "expect": "Power.\n"
+    "expert": 0,
+    "expect": "silicon the NES. I am from 2025.\n"
   }
 ]

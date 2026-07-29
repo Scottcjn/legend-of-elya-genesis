@@ -625,7 +625,9 @@ static void mwPut(u16 icon, u16 cx, u16 cy)
     SYS_enableInts();
 }
 
-static const char *TW_NAMES[4] = { "SELF", "QUEST", "CHAIN", "IRON" };
+/* 8 experts now; names kept to 5 chars for the MIND window */
+static const char *TW_NAMES[8] = { "BORN", "SELF", "ZELDA", "QUEST",
+                                   "CHAIN", "RETRO", "IRON", "META" };
 
 static void mwInit(void)
 {
@@ -641,9 +643,9 @@ static void mwInit(void)
 /* called when the router picks an expert (or at prompt start for now) */
 static void mwSetExpert(u16 e)
 {
-    if (e > 3) e = 0;
+    if (e > 7) e = 0;
     mwExpert = e;
-    mwPut(TWI_IDENTITY + e, TW_X + 1, TW_Y + 1);
+    mwPut(TWI_IDENTITY + (e & 3), TW_X + 1, TW_Y + 1);
     SYS_disableInts();
     VDP_clearTextArea(TW_X, TW_Y + 3, 6, 1);
     VDP_drawText(TW_NAMES[e], TW_X, TW_Y + 3);

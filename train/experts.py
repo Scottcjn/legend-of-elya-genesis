@@ -15,28 +15,54 @@ from pathlib import Path
 
 
 EXPERTS = [
+    # 8 narrow topics instead of 4 broad ones. The previous map left 41 of
+    # 85 questions unmatched and round-robined them arbitrarily, so every
+    # expert carried a random third of the Zelda lore and the retro-computer
+    # catalogue on top of its own subject. Those "generic" questions were
+    # never generic - they were four whole topics nobody had named.
+    # Order matters: the FIRST expert with the most keyword hits wins, so
+    # specific topics are listed before the general ones they resemble.
+    ("origin", [                       # her own age/birth - was leaking 1983
+        r"how old are you", r"are you old", r"are you vintage",
+        r"when were you born", r"what year were you born",
+        r"when is your birthday", r"your origin", r"born in 19",
+    ]),
     ("identity", [
         r"who are you", r"your name", r"where are you from", r"your purpose",
         r"flameholder", r"are you wise", r"what do you love", r"a secret",
         r"who made you", r"are you alive", r"do you dream", r"your creator",
-        r"sophia", r"elya", r"who is scott",
+        r"victorian study",
+    ]),
+    ("zelda", [                        # the single biggest unrouted cluster
+        r"zelda", r"link", r"ganon", r"navi", r"saria", r"malon",
+        r"epona", r"triforce", r"master sword", r"hyrule", r"kokiri",
+        r"death mountain", r"lon lon", r"goron", r"zora", r"ocarina",
+        r"temple", r"medallion", r"ocarina",
     ]),
     ("quest", [
         r"dungeon", r"proceed", r"lurks", r"need here", r"help me",
-        r"encourage", r"quest", r"danger", r"treasure", r"path", r"door",
+        r"encourage", r"quest", r"danger", r"treasure", r"path",
         r"monster", r"boss", r"realm", r"where do i", r"what should i",
-        r"lost", r"afraid", r"tired",
     ]),
     ("rustchain", [
-        r"rustchain", r"\brtc\b", r"earn", r"node", r"epoch", r"antiquity",
-        r"mining", r"miner", r"token", r"wallet", r"block", r"chain",
-        r"reward", r"attest", r"consensus",
+        r"rustchain", r"rtc", r"earn", r"node", r"epoch",
+        r"antiquity", r"mining", r"miner", r"token", r"wallet", r"attest",
+        r"reward", r"consensus",
     ]),
-    ("hardware", [
-        r"\bg4\b", r"\bg5\b", r"power8", r"altivec", r"vec_perm",
-        r"big-endian", r"endian", r"vr4300", r"\brsp\b", r"console",
-        r"cpu", r"powerpc", r"\bmips\b", r"silicon", r"runs this",
-        r"processor", r"\brom\b", r"\bram\b", r"68000", r"genesis",
+    ("retro", [                        # the home-computer catalogue
+        r"amiga", r"c64", r"commodore", r"apple ii", r"atari",
+        r"nes", r"snes", r"ti-99", r"trs-80", r"zx spectrum",
+        r"6502", r"spectrum", r"2600",
+    ]),
+    ("hardware", [                     # the silicon SHE runs on
+        r"g4", r"g5", r"power8", r"altivec", r"vec_perm",
+        r"big-endian", r"endian", r"vr4300", r"rsp", r"rdp",
+        r"console", r"powerpc", r"mips", r"68000", r"genesis",
+        r"runs this", r"expansion pak", r"n64", r"render",
+    ]),
+    ("meta", [                         # questions about the model itself
+        r"quantization", r"q4", r"your model", r"language runs you",
+        r"how big", r"parameters", r"neural", r"transformer",
     ]),
 ]
 N_EXPERTS = len(EXPERTS)

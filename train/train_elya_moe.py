@@ -124,7 +124,7 @@ class ElyaMoE(nn.Module):
         self.pos = nn.Embedding(CTX, N_EMBED)
         nn.init.normal_(self.pos.weight, std=0.05)
         self.experts = nn.ModuleList(Expert() for _ in range(N_EXPERTS))
-        self.router = TernaryLinear(N_EMBED, N_EXPERTS)
+        self.router = TernaryLinear(N_EMBED * 2, N_EXPERTS)
 
     def forward(self, idx, e):
         ew = fq_emb(self.emb.weight)
@@ -136,14 +136,24 @@ class ElyaMoE(nn.Module):
         return ex.ln_f(x) @ ew.T
 
     def route(self, idx, mask=None):
-        """Mean-pool prompt embeddings -> expert logits."""
+        """[mean-pool | max-pool] of prompt embeddings -> expert logits.
+
+        Mean-pool alone is a bag-of-bytes: it cannot separate questions
+        that differ by one distinctive word ("born" vs "Zelda") because
+        those bytes are diluted by averaging. That capped an 8-way router
+        at ~60%. Max-pool captures the PRESENCE of a distinctive feature
+        regardless of prompt length. On the 68000 it is 64 compares per
+        character - nothing."""
         ew = fq_emb(self.emb.weight)
         x = ew[idx]
         if mask is not None:
-            x = (x * mask.unsqueeze(-1)).sum(1) / mask.sum(1, keepdim=True).clamp(min=1)
+            m = mask.unsqueeze(-1)
+            avg = (x * m).sum(1) / mask.sum(1, keepdim=True).clamp(min=1)
+            mx = (x + (m - 1) * 1e4).max(1).values      # masked max
         else:
-            x = x.mean(1)
-        return self.router(fq_act(x))
+            avg = x.mean(1)
+            mx = x.max(1).values
+        return self.router(fq_act(torch.cat([avg, mx], dim=-1)))
 
 model = ElyaMoE().to(device)
 tot = sum(p.numel() for p in model.parameters())
@@ -197,7 +207,7 @@ for step in range(total_steps):
     loss = F.cross_entropy(model(x, e).view(-1, VOCAB), y.view(-1))
     loss = loss + PIN_W * F.relu(model.emb.weight.abs() - 1.8).pow(2).mean()
     # router trained on every step: it is tiny and needs the signal
-    loss = loss + 0.5 * F.cross_entropy(model.route(rp, rm), ry)
+    loss = loss + 2.0 * F.cross_entropy(model.route(rp, rm), ry)
     opt.zero_grad(); loss.backward()
     torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     opt.step(); sched.step()
