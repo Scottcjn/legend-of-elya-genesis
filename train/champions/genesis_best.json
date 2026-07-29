@@ -1,11 +1,12 @@
 {
-  "t": 1785300521,
+  "t": 1785305213,
   "target": "genesis",
-  "round": -1,
-  "lr": 0.0005,
-  "steps": 25000,
+  "round": 1,
+  "lr": 0.0003,
+  "steps": 40000,
   "pin": 0.01,
   "qa_repeat": 1200,
-  "eval_loss": 0.9988,
-  "note": "v4 seed champion"
+  "eval_loss": 0.9671,
+  "secs": 1727,
+  "rc": 0
 }

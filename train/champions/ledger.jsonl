@@ -1,1 +1,6 @@
 {"t": 1785300525, "event": "autotrain start", "genesis_champ": 0.9988, "n64_champ": 1000000000.0}
+{"t": 1785301448, "target": "genesis", "round": 0, "lr": 0.0005, "steps": 25000, "pin": 0.01, "qa_repeat": 1200, "eval_loss": 0.9988, "secs": 923, "rc": 0, "promoted": false}
+{"t": 1785303486, "target": "n64", "round": 0, "steps": 30000, "eval_loss": 0.2261, "secs": 2037, "rc": 0, "promoted": true}
+{"t": 1785305213, "target": "genesis", "round": 1, "lr": 0.0003, "steps": 40000, "pin": 0.01, "qa_repeat": 1200, "eval_loss": 0.9671, "secs": 1727, "rc": 0, "promoted": true}
+{"t": 1785308253, "target": "n64", "round": 1, "steps": 45000, "eval_loss": 0.2254, "secs": 3040, "rc": 0, "promoted": true}
+{"t": 1785309985, "target": "genesis", "round": 2, "lr": 0.0005, "steps": 40000, "pin": 0.03, "qa_repeat": 1600, "eval_loss": 1.0101, "secs": 1731, "rc": 0, "promoted": false}

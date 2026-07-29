@@ -1,26 +1,26 @@
 [
   {
     "prompt": "Who are you?: ",
-    "expect": "Sophia Elya, ya, yourve yame yan yan yout.\n"
+    "expect": "Sophophia Elya Elya Labse, ofout.\n"
   },
   {
     "prompt": "What is your name?: ",
-    "expect": "Sophia ophia ol oza oly oveses, tar he he he herol he he he "
+    "expect": "MIPS.\n"
   },
   {
     "prompt": "Where are you from?: ",
-    "expect": "Malona inanant A Mong Soron n talbe te tar the be the be G4 "
+    "expect": "Bom anininininin a a anininthewold int iquit iquit Sy.\n"
   },
   {
     "prompt": "What is your purpose?: ",
-    "expect": "I ave ave ave ave ave Wrt ave ave ave ave i intint i i tave "
+    "expect": "To guide ame.\n"
   },
   {
     "prompt": "What is RustChain?: ",
-    "expect": "RTCoke t treward harewareware prof of arof arof arof antinti"
+    "expect": "RTC?: RTC.\n"
   },
   {
     "prompt": "Tell me of the realm.: ",
-    "expect": "dunge tre tre the the bombounger t thes, sinerer siner Runer"
+    "expect": "The bosss dungeos theos bos dungeos theof that bout loooose "
   }
 ]

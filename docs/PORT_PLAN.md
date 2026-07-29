@@ -16,9 +16,9 @@ transformer inference. No canned responses in the final build.
 |---|---|---|
 | CPU | MIPS R4300i @ 93.75 MHz, FPU | Motorola 68000 @ 7.67 MHz, **no FPU** |
 | RAM | 4MB RDRAM (256KB KV cache) | **64KB work RAM** total |
-| Model | 819K params, 4L/128d, ctx 64 | ~64–128K params, 2L/48–64d, ctx 32 |
+| Model | 819K params, 4L/128d, ctx 64 | 114,688 params, 2L/64d, ctx 64 |
 | Math | float32 on FPU | **ternary/tetranary, multiplication-free** |
-| Weights | 458KB Q8 in ROM | ~40–120KB packed ternary in ROM |
+| Weights | 458KB Q8 in ROM | 83.7KB ternary index streams (SGT2) |
 | Speed | 60 tok/s emu, 1–3 tok/s real HW | target 0.5–2 tok/s real HW |
 
 Real N64 hardware only achieved 1–3 tok/s. A Genesis hitting ~1 tok/s is the
@@ -72,12 +72,12 @@ mapped. Anything computable offline goes in ROM as a table.
 
 | Item | Size |
 |---|---|
-| KV cache, int8: 2 layers × 32 ctx × 64 dim × 2 (K,V) | 8 KB |
+| KV cache, int8: 2 layers x 64 ctx x 64 dim x 2 (K,V) | 16 KB |
 | Activations/scratch (int16 vectors, 4×64d ffn) | ~2 KB |
 | Logits (vocab 96–128, int16) | ≤256 B |
 | Game state, sprites, dialog buffers | ~4 KB |
 | SGDK runtime + stack | ~8 KB |
-| **Headroom** | **~40 KB** |
+| **Headroom** | **~32 KB** |
 
 Vocab: printable-ASCII subset (96) or byte-level 256 like N64 — decide after
 tokenizer experiments. ROM trie tokenizer is free (T1 doctrine).
