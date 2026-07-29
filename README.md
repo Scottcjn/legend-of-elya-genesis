@@ -135,4 +135,9 @@ bash    train/make_chant.sh                   # boot voice
 
 ## License
 
-AGPL-3.0. © Elyan Labs LLC.
+Apache-2.0. © 2026 Elyan Labs LLC. See `LICENSE` and `NOTICE`.
+
+Apache rather than MIT for one reason: the explicit **patent grant**. This
+repository publishes a technique (memory-mapped expert activation, where
+the storage medium sets the economics of a mixture of experts), and the
+grant makes it unambiguous that anyone can build on it.

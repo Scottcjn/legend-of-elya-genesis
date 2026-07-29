@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: AGPL-3.0
+/* SPDX-License-Identifier: Apache-2.0
  * elya_gpt.h — Elya into Dreams: integer-only nano-GPT for the 68000.
  *
  * Ternary weights (2-bit packed, ROM), int16 Q3.12 activations,

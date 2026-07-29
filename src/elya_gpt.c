@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: AGPL-3.0
+/* SPDX-License-Identifier: Apache-2.0
  * elya_gpt.c — integer-only transformer inference for the Sega Genesis.
  * See elya_gpt.h for format. Mirrors train/train_elya_genesis.py QAT
  * semantics: any rounding done here was fake-quantized during training.
