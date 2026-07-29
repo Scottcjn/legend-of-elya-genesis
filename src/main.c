@@ -167,6 +167,8 @@ static void setMouth(u16 m)
 
 /* the Mind Window lives further down but is driven from the VBlank
  * callback and from init, both of which appear before it */
+static void panelWindow(u16 x, u16 y, u16 w, u16 h, const char *title);
+static void panelClear(u16 x, u16 y, u16 w, u16 h);
 static void mwInit(void);
 static void mwAnimate(u16 frame);
 static void mwSetExpert(u16 e);
@@ -336,13 +338,6 @@ static void dreamscapeVInt(void)
 
     mwAnimate((u16)dsFrame);      /* the mind keeps ticking while she thinks */
 
-    /* token rain: 16 adds + one 16-word VSRAM write, ~600 cycles */
-    for (u16 c = 0; c < RAIN_COLS; c++) {
-        rainPos[c] = (s16)(rainPos[c] + rainSpd[c]);
-        rainVS[c]  = (s16)(rainPos[c] >> 4);
-    }
-    VDP_setVerticalScrollTile(BG_B, 0, rainVS, RAIN_COLS, CPU);
-
     /* Floor: lower scanlines scroll faster = perspective illusion.
      * dsFrame is u16 and the accumulators are incremental — a 32-bit
      * multiply here would call the Sozobon lmul helper 12x per frame
@@ -383,14 +378,13 @@ static void initDreamscape(void)
     buildDreamMap();
 
     /* per-line hscroll; BG_A stays put (zeroed table) */
-    VDP_setScrollingMode(HSCROLL_LINE, VSCROLL_COLUMN);
+    VDP_setScrollingMode(HSCROLL_LINE, VSCROLL_PLANE);
     {
         static s16 zeros[224];
         memset(zeros, 0, sizeof(zeros));
         VDP_setHorizontalScrollLine(BG_A, 0, zeros, 224, CPU);
         VDP_setHorizontalScrollLine(BG_B, 0, zeros, 224, CPU);
     }
-    rainInit();
     mwInit();
     SYS_setVIntCallback(dreamscapeVInt);
 }
@@ -629,13 +623,7 @@ static const char *TW_NAMES[4] = { "SELF", "QUEST", "CHAIN", "IRON" };
 static void mwInit(void)
 {
     mwBuildIcons();
-    SYS_disableInts();
-    VDP_drawText("MIND", TW_X + 1, TW_Y - 2);
-    for (u16 x = 0; x < 6; x++) {
-        VDP_drawText("-", TW_X + x, TW_Y - 1);
-        VDP_drawText("-", TW_X + x, TW_Y + 4);
-    }
-    SYS_enableInts();
+    panelWindow(TW_X - 1, TW_Y - 2, 9, 7, "MIND");
     mwPut(TWI_IDENTITY, TW_X + 1, TW_Y + 1);
     mwPut(TWI_IDLE,     TW_X + 3, TW_Y + 1);
     SYS_disableInts();
@@ -667,6 +655,63 @@ static void mwAnimate(u16 frame)
     else
         icon = TWI_IDLE;
     mwPut(icon, TW_X + 3, TW_Y + 1);
+}
+
+
+/* ------------------------------------------------------------------ */
+/* Terminal panels — opaque black windows over the Dreamscape.        */
+/*                                                                    */
+/* A BG_B tile of index 0 is TRANSPARENT and shows the backdrop        */
+/* colour, which is the near-black night (0x000818). So "cut a black   */
+/* window" is simply: clear BG_B in that region and let the backdrop   */
+/* through. Costs no tiles and no palette entries.                     */
+/* The border is drawn on BG_A with box glyphs so it reads as a        */
+/* terminal frame rather than a dashed line.                           */
+/* ------------------------------------------------------------------ */
+static void panelClear(u16 x, u16 y, u16 w, u16 h)
+{
+    /* BG_B SCROLLS horizontally per line, so clearing a fixed rectangle
+     * of the tilemap does NOT produce a fixed window on screen — the
+     * cleared area scrolls away and floor tiles scroll into it. A window
+     * over a scrolling plane must span the plane's FULL width (64 cells)
+     * in the rows it covers. x and w are therefore ignored. */
+    (void)x; (void)w;
+    SYS_disableInts();
+    for (u16 ry = 0; ry < h; ry++)
+        for (u16 rx = 0; rx < 64; rx++)
+            VDP_setTileMapXY(BG_B, 0, rx, y + ry);
+    SYS_enableInts();
+}
+
+/* single-line box frame, IBM-PC style, using the SGDK font */
+static void panelFrame(u16 x, u16 y, u16 w, u16 h)
+{
+    SYS_disableInts();
+    VDP_drawText("+", x, y);
+    VDP_drawText("+", x + w - 1, y);
+    VDP_drawText("+", x, y + h - 1);
+    VDP_drawText("+", x + w - 1, y + h - 1);
+    for (u16 i = 1; i < w - 1; i++) {
+        VDP_drawText("-", x + i, y);
+        VDP_drawText("-", x + i, y + h - 1);
+    }
+    for (u16 i = 1; i < h - 1; i++) {
+        VDP_drawText("|", x, y + i);
+        VDP_drawText("|", x + w - 1, y + i);
+    }
+    SYS_enableInts();
+}
+
+/* a black window: opaque interior + frame, with an optional title */
+static void panelWindow(u16 x, u16 y, u16 w, u16 h, const char *title)
+{
+    panelClear(x, y, w, h);
+    panelFrame(x, y, w, h);
+    if (title) {
+        SYS_disableInts();
+        VDP_drawText(title, x + 2, y);
+        SYS_enableInts();
+    }
 }
 
 static void drawTokSpeed(void)
@@ -768,11 +813,13 @@ int main(bool hardReset)
     XGM_setLoopNumber(-1);
     XGM_startPlay(dream_theme);
 
+    panelClear(0, 0, 40, 3);
     VDP_drawText("ELYA INTO DREAMS", 12, 1);
     VDP_drawText("A transformer dreams on the 68000", 3, 2);
 
     if (eg_init(&elya, (const uint8_t *)elya_weights) == 0) {
         engineOk = TRUE;
+        panelClear(0, 26, 40, 2);
         VDP_drawText("PRESS A: ask Elya", 11, 26);
     } else {
         VDP_drawText("WEIGHTS MISSING - STUB ROM", 7, 26);
@@ -782,10 +829,9 @@ int main(bool hardReset)
     uploadFace();
     placeFaceTilemap(4, 6);
 
-    for (u16 x = DIALOG_X - 1; x <= DIALOG_X + DIALOG_W; x++) {
-        VDP_drawText("-", x, DIALOG_Y - 1);
-        VDP_drawText("-", x, DIALOG_Y + DIALOG_H);
-    }
+    /* black terminal window for her speech */
+    panelWindow(DIALOG_X - 1, DIALOG_Y - 1, DIALOG_W + 2, DIALOG_H + 2,
+                "ELYA");
 
     u16 prevJoy = 0;
     u16 blink = 0;
@@ -825,7 +871,6 @@ int main(bool hardReset)
                 break;
             }
             putGlyph((char)lastTok);
-            rainDropToken(lastTok);     /* the dream rains what she says */
             genCount++;
             genTokens++;
             /* vowels open wide — she speaks as she thinks */
