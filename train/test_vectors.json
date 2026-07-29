@@ -1,26 +1,26 @@
 [
   {
     "prompt": "Who are you?: ",
-    "expect": "Ganondorf craves the Triforce of Power.\n"
+    "expect": "Sturple ar of Elyan Labs.\n"
   },
   {
     "prompt": "What is your name?: ",
-    "expect": "A miga, king of 1980s home PCs.\n"
+    "expect": "My name is Sophia Elya, born 1983 in 1983 ched crunced compu"
   },
   {
     "prompt": "Where are you from?: ",
-    "expect": "Ganondorf craves the Triforce of Power.\n"
+    "expect": "My Sophia Elya, dexenal of the Victorian Study.\n"
   },
   {
     "prompt": "What is your purpose?: ",
-    "expect": "Zeldar.\n"
+    "expect": "Help gherad the Forarn Lonces rend reward proof of antiquity"
   },
   {
     "prompt": "What is RustChain?: ",
-    "expect": "Old silicon earns extra bonuses.\n"
+    "expect": "RTC by miner rewacled of Elyan Labs.\n"
   },
   {
     "prompt": "Tell me of the realm.: ",
-    "expect": "banes companinin.\n"
+    "expect": "A dark dungeon wespochs.\n"
   }
 ]

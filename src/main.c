@@ -169,6 +169,8 @@ static void setMouth(u16 m)
  * callback and from init, both of which appear before it */
 static void panelWindow(u16 x, u16 y, u16 w, u16 h, const char *title);
 static void panelClear(u16 x, u16 y, u16 w, u16 h);
+static void runInit(void);
+static void runAnimate(u16 frame);
 static void mwInit(void);
 static void mwAnimate(u16 frame);
 static void mwSetExpert(u16 e);
@@ -336,7 +338,8 @@ static void dreamscapeVInt(void)
 {
     dsFrame++;
 
-    mwAnimate((u16)dsFrame);      /* the mind keeps ticking while she thinks */
+    mwAnimate((u16)dsFrame);
+    runAnimate((u16)dsFrame);      /* the mind keeps ticking while she thinks */
 
     /* Floor: lower scanlines scroll faster = perspective illusion.
      * dsFrame is u16 and the accumulators are incremental — a 32-bit
@@ -386,6 +389,7 @@ static void initDreamscape(void)
         VDP_setHorizontalScrollLine(BG_B, 0, zeros, 224, CPU);
     }
     mwInit();
+    runInit();
     SYS_setVIntCallback(dreamscapeVInt);
 }
 
@@ -705,12 +709,127 @@ static void panelFrame(u16 x, u16 y, u16 w, u16 h)
 /* a black window: opaque interior + frame, with an optional title */
 static void panelWindow(u16 x, u16 y, u16 w, u16 h, const char *title)
 {
-    panelClear(x, y, w, h);
+    /* Frame only. Clearing BG_B behind the panel was tried and reverted:
+     * over the scrolling floor a fixed rectangle scrolls away, and
+     * clearing whole rows to compensate ate the Dreamscape down to a
+     * thin stripe. The dream stays whole; the frames float over it. */
     panelFrame(x, y, w, h);
     if (title) {
         SYS_disableInts();
         VDP_drawText(title, x + 2, y);
         SYS_enableInts();
+    }
+}
+
+
+/* ================================================================== */
+/* THE RUNNER — a tiny Elya sprinting the floor while she thinks.     */
+/*                                                                    */
+/* Hardware sprites, so it costs the scroll planes nothing and does   */
+/* not disturb the Dreamscape or the dialog. She runs, rings drift    */
+/* toward her, and when one is caught it pops and respawns ahead.     */
+/* Pure Sonic homage, and it doubles as an honest activity indicator: */
+/* it is driven from the VBlank callback, so it only moves while the  */
+/* 68000 is genuinely working.                                        */
+/* ================================================================== */
+#define RUN_TILE   (TW_TILE_INDEX + TW_NICONS)
+#define RUN_NTILES 10      /* 2 runner frames x4 tiles + 2 ring frames */
+#define RUN_Y      150     /* pixel row: on the checkerboard floor     */
+#define N_RINGS    3
+
+static u32 runTiles[RUN_NTILES * 8];
+static s16 runX = 0;
+static s16 ringX[N_RINGS], ringPop[N_RINGS];
+static u16 runVisible = FALSE;
+
+static void runPix(u16 t, u16 x, u16 y, u16 c)
+{
+    u32 *row = &runTiles[t * 8 + y];
+    u16 sh = (7 - x) * 4;
+    *row = (*row & ~((u32)0xF << sh)) | ((u32)c << sh);
+}
+
+static void runGlyph(u16 t, const char *rows)
+{
+    for (u16 y = 0; y < 8; y++)
+        for (u16 x = 0; x < 8; x++) {
+            char ch = rows[y * 8 + x];
+            if (ch != '.') runPix(t, x, y, (u16)(ch - '0'));
+        }
+}
+
+/* 16x16 runner = 4 tiles in VDP column order: TL,BL,TR,BR */
+static void buildRunner(void)
+{
+    memset(runTiles, 0, sizeof(runTiles));
+    /* frame 0 - stride out. PAL1: 1 skin 2 hair 3 hairD 5 dress 6 line */
+    runGlyph(0, "....333." "...3333" "..33333" "..33222" "..32222" "..32211"
+                "...2211" "....211");                      /* head/hair TL */
+    runGlyph(1, "....55.." "...5555." "..555555" "..55555." "...555.."
+                "...1.1.." "..1...1." ".1.....1");          /* body/legs BL */
+    runGlyph(2, "3......." "33......" "333....." "222....." "222....."
+                "11......" "1......." "........");          /* hair trail TR */
+    runGlyph(3, "5......." "55......" "5......." "........" "........"
+                "........" "........" "........");          /* dress tail BR */
+    /* frame 1 - legs together */
+    runGlyph(4, "....333." "...3333" "..33333" "..33222" "..32222" "..32211"
+                "...2211" "....211");
+    runGlyph(5, "....55.." "...5555." "..555555" "..55555." "...555.."
+                "...11..." "...1.1.." "..1...1.");
+    runGlyph(6, "3......." "33......" "333....." "222....." "222....."
+                "11......" "1......." "........");
+    runGlyph(7, "5......." "55......" "5......." "........" "........"
+                "........" "........" "........");
+    /* ring, two frames (wide / edge-on) */
+    runGlyph(8, "..3333.." ".3....3." "3......3" "3......3" "3......3"
+                "3......3" ".3....3." "..3333..");
+    runGlyph(9, "...33..." "...33..." "..3..3.." "..3..3.." "..3..3.."
+                "..3..3.." "...33..." "...33...");
+    VDP_loadTileData(runTiles, RUN_TILE, RUN_NTILES, DMA);
+}
+
+static void runInit(void)
+{
+    buildRunner();
+    runX = 8;
+    for (u16 i = 0; i < N_RINGS; i++) {
+        ringX[i] = (s16)(120 + i * 70);
+        ringPop[i] = 0;
+    }
+}
+
+/* called from VBlank: only animates while she is actually working */
+static void runAnimate(u16 frame)
+{
+    if (!runVisible) {
+        VDP_setSpriteFull(0, 0, 0, SPRITE_SIZE(1, 1), 0, 0);
+        return;
+    }
+
+    runX += 2;
+    if (runX > 320) runX = -16;
+
+    for (u16 i = 0; i < N_RINGS; i++) {
+        if (ringPop[i]) {
+            if (--ringPop[i] == 0) ringX[i] = (s16)(320 + (i * 40));
+        } else {
+            ringX[i] -= 1;                       /* drift toward her */
+            if (ringX[i] < -8) ringX[i] = 320;
+            s16 d = (s16)(ringX[i] - runX);
+            if (d > -6 && d < 14) ringPop[i] = 12;   /* caught! */
+        }
+    }
+
+    u16 f = ((frame >> 2) & 1) ? 4 : 0;           /* 2-frame run cycle */
+    VDP_setSpriteFull(0, runX + 128, RUN_Y + 128, SPRITE_SIZE(2, 2),
+                      TILE_ATTR_FULL(PAL1, TRUE, FALSE, FALSE, RUN_TILE + f),
+                      1);
+    for (u16 i = 0; i < N_RINGS; i++) {
+        u16 rt = RUN_TILE + 8 + (ringPop[i] ? 1 : ((frame >> 3) & 1));
+        s16 ry = RUN_Y + 4 - (ringPop[i] ? (12 - ringPop[i]) : 0);
+        VDP_setSpriteFull(1 + i, ringX[i] + 128, ry + 128, SPRITE_SIZE(1, 1),
+                          TILE_ATTR_FULL(PAL2, TRUE, FALSE, FALSE, rt),
+                          (i == N_RINGS - 1) ? 0 : (2 + i));
     }
 }
 
@@ -723,6 +842,26 @@ static void drawTokSpeed(void)
     sprintf(buf, "%lu.%02lu tok/s", (u32)(t100 / 100), (u32)(t100 % 100));
     SYS_disableInts();
     VDP_drawText(buf, 26, 27);
+    SYS_enableInts();
+}
+
+/* UP/DOWN browse the question list; A asks the highlighted one. */
+static void showSelected(u16 idx)
+{
+    SYS_disableInts();
+    VDP_clearTextArea(0, 26, 40, 1);
+    VDP_drawText("<", 1, 26);
+    VDP_drawText(">", 38, 26);
+    {
+        const char *q = prompts[idx];
+        u16 n = 0;
+        while (q[n] && n < 34) n++;
+        if (n > 2) n -= 2;                  /* trim the trailing ": " */
+        char buf[36];
+        for (u16 i = 0; i < n; i++) buf[i] = q[i];
+        buf[n] = 0;
+        VDP_drawText(buf, (u16)(20 - (n >> 1)), 26);
+    }
     SYS_enableInts();
 }
 
@@ -744,6 +883,7 @@ static void startPrompt(u16 idx)
     }
     mode = ST_FEED;
     mwState = 1;                  /* thinking */
+    runVisible = TRUE;
     clearDialog();
     VDP_drawText("Elya dreams", 2, 27);
     /* echo the question in the dialog box */
@@ -813,14 +953,13 @@ int main(bool hardReset)
     XGM_setLoopNumber(-1);
     XGM_startPlay(dream_theme);
 
-    panelClear(0, 0, 40, 3);
     VDP_drawText("ELYA INTO DREAMS", 12, 1);
     VDP_drawText("A transformer dreams on the 68000", 3, 2);
 
     if (eg_init(&elya, (const uint8_t *)elya_weights) == 0) {
         engineOk = TRUE;
-        panelClear(0, 26, 40, 2);
-        VDP_drawText("PRESS A: ask Elya", 11, 26);
+        VDP_drawText("UP/DOWN choose   A ask", 9, 27);
+        showSelected(promptIdx);
     } else {
         VDP_drawText("WEIGHTS MISSING - STUB ROM", 7, 26);
     }
@@ -839,10 +978,17 @@ int main(bool hardReset)
     while (TRUE) {
         u16 joy = JOY_readJoypad(JOY_1);
 
-        if ((joy & BUTTON_A) && !(prevJoy & BUTTON_A)
-            && mode == ST_IDLE && engineOk) {
-            startPrompt(promptIdx);
-            promptIdx = (promptIdx + 1) % NUM_PROMPTS;
+        if (mode == ST_IDLE && engineOk) {
+            if ((joy & BUTTON_UP) && !(prevJoy & BUTTON_UP)) {
+                promptIdx = (promptIdx + NUM_PROMPTS - 1) % NUM_PROMPTS;
+                showSelected(promptIdx);
+            }
+            if ((joy & BUTTON_DOWN) && !(prevJoy & BUTTON_DOWN)) {
+                promptIdx = (promptIdx + 1) % NUM_PROMPTS;
+                showSelected(promptIdx);
+            }
+            if ((joy & BUTTON_A) && !(prevJoy & BUTTON_A))
+                startPrompt(promptIdx);
         }
         prevJoy = joy;
 
@@ -866,8 +1012,9 @@ int main(bool hardReset)
                 || rowY >= DIALOG_H) {
                 mode = ST_IDLE;
                 mwState = 0;      /* idle */
+                runVisible = FALSE;
                 setMouth(MOUTH_CLOSED);
-                VDP_drawText("PRESS A: ask Elya", 2, 27);
+                showSelected(promptIdx);
                 break;
             }
             putGlyph((char)lastTok);
