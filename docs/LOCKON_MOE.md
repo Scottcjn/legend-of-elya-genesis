@@ -31,24 +31,42 @@ Verified against SGDK's `mapper.h`: the SEGA mapper views ROM as 512KB
 banks, region 0 (`$000000-$07FFFF`) fixed, regions 1-7 remappable, bank
 index 0-63.
 
+⚠️ **This table was wrong in the first version of this document** and is
+corrected here. The error: it used the size of a *single-model blob*
+(83.7 KB, which includes the 16 KB shared embedding) as the size of an
+*expert shard* (which does not). Measured from the actual exported
+`res/elya_moe.bin`:
+
 | | |
 |---|---|
-| One expert (SGT2, 2L/64d) | **83.7 KB** |
-| Experts per 512KB bank | **6** |
-| Max banks (SEGA mapper) | 64 |
-| **Theoretical ceiling** | **32 MB ≈ 380 experts ≈ 43M parameters** |
-| Plain 4MB cart, no mapper at all | **~45 experts** |
+| Shared block (embedding + exp LUT + router) | **17,119 B**, resident |
+| One expert **shard** | **~72.5 KB** (not 83.7) |
+| Experts per 512KB bank | **7** |
+| **Plain 4MB cart, no mapper** | **57 experts** |
+| SEGA mapper ceiling (64 banks x 512KB) | 32MB ≈ 470 shards |
+| ⚠️ **What the engine actually supports** | **16** (`EG_MAX_EXPERTS`) |
 
-Note the last row: we do not even need a mapper to get a large gain. A
-standard 4MB ROM holds ~45 experts today. The mapper is for later.
+The last row matters: `src/elya_gpt.h` caps experts at 16 and `eg_init`
+enforces it. The 32MB ceiling describes a machine that would need a code
+change to reach, so quoting it as a current capability is not honest.
+57-in-4MB is real once the cap is raised; 16 is what runs today.
 
 ⚠️ **Needs hardware verification before we commit to >4MB**: which
 EverDrive models implement the SEGA/SSF2 mapper, and what maximum ROM they
 accept. Emulator support (BlastEm) is not proof for the real 1601. Until
 that is checked on the actual cart, target **4MB, no mapper** — which is
-already ~45 experts and needs no special hardware.
+already 57 experts and needs no special hardware.
 
-## Why this fixes our actual problem
+## Status: UNPROVEN
+
+⚠️ The first MoE training run produced **60 spaces for every prompt**
+(`train/moe_vectors.json`) and misrouted 2 of 6 probes. The blob was
+exported and committed anyway; nothing in the pipeline gated on output
+quality. Treat everything below as the *hypothesis under test*, not a
+result. The decisive control — one 114K model trained on a single shard —
+is what settles it.
+
+## Why this MIGHT fix our actual problem (hypothesis)
 
 The current model is 114,688 parameters trying to memorize 122 QA pairs
 spanning identity, dungeon lore, RustChain economics, and vintage CPU
@@ -63,12 +81,21 @@ cleanly.
 
 ## Expert map (derived from the corpus, not invented)
 
-| Expert | Topics | QA pairs |
-|---|---|---|
-| 0 IDENTITY | who/name/from/purpose, Flameholder, wisdom, love, secrets | ~30 |
-| 1 QUEST | dungeon, how to proceed, what lurks, help, encouragement | ~35 |
-| 2 RUSTCHAIN | RustChain, RTC, earning, nodes, epochs, proof of antiquity | ~30 |
-| 3 HARDWARE | G4/G5/POWER8, AltiVec, vec_perm, big-endian, VR4300, RSP | ~27 |
+Measured by running `train/experts.py` — earlier figures in this table
+were guessed, and were wrong:
+
+| Expert | Topics | routed QA | total lines |
+|---|---|---|---|
+| 0 IDENTITY | who/name/from/purpose, Flameholder, wisdom, love | 21 | **279** |
+| 1 QUEST | dungeon, proceed, what lurks, help, encouragement | 26 | 76 |
+| 2 RUSTCHAIN | RustChain, RTC, earning, nodes, epochs, antiquity | 18 | 85 |
+| 3 HARDWARE | G4/G5/POWER8, AltiVec, vec_perm, endianness, RSP | 26 | 78 |
+
+⚠️ **Expert 0 is 3.5x oversized** because `experts.py` dumps every
+unclassifiable background-lore line into identity as a fallback. That
+breaks the central premise for that expert specifically — it has a
+*harder* job than the single model did, not an easier one. Fix before
+drawing conclusions from expert 0.
 
 ## Routing
 
@@ -125,8 +152,9 @@ converts an offset into (bank, in-bank address) when the mapper is used.
 2. **Bank switching during a forward pass** is safe for data but a bank
    switch that maps out *executing code* is fatal. Keep all code in the
    fixed region 0; only weights get banked.
-3. **The N64 port cannot use this** — its cartridge is not memory-mapped
-   the same way (weights are DMA'd from ROM to RDRAM), so there the MoE
-   would cost real RAM. This technique is genuinely Genesis-specific.
+3. ~~The N64 port cannot use this~~ — **WRONG, retracted.** The N64 can,
+   and its version is richer: libdragon's `dma_read_async()` lets the next
+   expert stream in *while the CPU generates from the current one*, which
+   the Genesis cannot do. See `legend-of-elya-n64/docs/STREAMING_MOE.md`.
 4. ROM size is not free on real hardware: a 4MB EverDrive load is fine; a
    32MB image needs mapper support confirmed on the actual device.

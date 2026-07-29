@@ -110,7 +110,9 @@ static void uploadFace(void)
             t++;
         }
     }
+    SYS_disableInts();
     VDP_loadTileData(faceTiles, FACE_TILE_INDEX, FACE_TILES, DMA_QUEUE);
+    SYS_enableInts();
 }
 
 static void placeFaceTilemap(u16 px, u16 py)
@@ -300,16 +302,24 @@ static void rainInit(void)
     }
 }
 
-/* called once per generated token — the dream rains what she just said */
+/* called once per generated token — the dream rains what she just said.
+ *
+ * SGDK's VDP helpers are NOT reentrant: each sets a VDP address and then
+ * writes data. If the VBlank callback fires between those two steps it
+ * retargets the VDP, and this write lands somewhere arbitrary — VRAM
+ * corruption or a lockup. Every main-loop VDP access in this file is
+ * therefore guarded. (Learned the hard way: the ROM crashed.) */
 static void rainDropToken(u8 tok)
 {
     if (tok < 32 || tok > 126) return;
     u16 row = (u16)((0 - (rainPos[rainCol] >> 7)) - 1) & 31;
     u16 t = TILE_FONT_INDEX + (tok - 32);
+    SYS_disableInts();
     VDP_setTileMapXY(BG_B, TILE_ATTR_FULL(PAL1, FALSE, FALSE, FALSE, t),
                      rainCol * 2, row);
     VDP_setTileMapXY(BG_B, TILE_ATTR_FULL(PAL1, FALSE, FALSE, FALSE, t),
                      rainCol * 2 + 1, row);
+    SYS_enableInts();
     rainCol = (rainCol + 7) & (RAIN_COLS - 1);   /* stride 7, never adjacent */
 }
 
@@ -429,7 +439,9 @@ static u16 engineOk = FALSE;
 
 static void clearDialog(void)
 {
+    SYS_disableInts();
     VDP_clearTextArea(DIALOG_X, DIALOG_Y, DIALOG_W, DIALOG_H);
+    SYS_enableInts();
     col = 0; rowY = 0;
 }
 
@@ -437,7 +449,11 @@ static void putGlyph(char c)
 {
     if (c == '\n') { col = 0; rowY++; return; }
     char s[2] = { c, 0 };
-    if (rowY < DIALOG_H) VDP_drawText(s, DIALOG_X + col, DIALOG_Y + rowY);
+    if (rowY < DIALOG_H) {
+        SYS_disableInts();
+        VDP_drawText(s, DIALOG_X + col, DIALOG_Y + rowY);
+        SYS_enableInts();
+    }
     col++;
     if (col >= DIALOG_W) { col = 0; rowY++; }
 }
@@ -449,7 +465,9 @@ static void drawTokSpeed(void)
     u32 elapsed = vtimer - genStart;
     u32 t100 = elapsed ? (genTokens * 6000) / elapsed : 0;
     sprintf(buf, "%lu.%02lu tok/s", (u32)(t100 / 100), (u32)(t100 % 100));
+    SYS_disableInts();
     VDP_drawText(buf, 26, 27);
+    SYS_enableInts();
 }
 
 static void startPrompt(u16 idx)
@@ -467,6 +485,46 @@ static void startPrompt(u16 idx)
     for (const char *p = curPrompt; *p; p++) putGlyph(*p);
     putGlyph('\n');
 }
+
+#ifdef ELYA_BENCH
+/* Cycle-accurate throughput benchmark, run at boot with no input.
+ * BlastEm is cycle-accurate, so vtimer (vblank count) gives a REAL
+ * 68000 measurement rather than an x86 host proxy. Build two ROMs with
+ * identical weights in different formats and compare the number.
+ * See docs/SPEED_PLAN.md - this closes the "host x86" measurement gap. */
+#define BENCH_TOKENS 40
+static void runBenchmark(void)
+{
+    char buf[40];
+    VDP_drawText("THROUGHPUT BENCHMARK", 10, 6);
+#if EG_FORMAT_INDEX_STREAMS
+    VDP_drawText("format: SGT2 index streams", 7, 8);
+#else
+    VDP_drawText("format: SGT1 2-bit packed", 7, 8);
+#endif
+    VDP_drawText("running...", 15, 10);
+
+    eg_reset(&elya);
+    u32 t0 = vtimer;
+    u8 tok = 'a';
+    for (u16 i = 0; i < BENCH_TOKENS; i++)
+        tok = eg_next_token(&elya, tok);
+    u32 frames = vtimer - t0;
+
+    /* tok/s x100, integer only (no sprintf float, no 32-bit divide in
+     * the measured region itself) */
+    u32 t100 = frames ? ((u32)BENCH_TOKENS * 6000) / frames : 0;
+    sprintf(buf, "%u tokens in %u frames", (u16)BENCH_TOKENS, (u16)frames);
+    VDP_clearTextArea(0, 10, 40, 1);
+    VDP_drawText(buf, 6, 10);
+    sprintf(buf, "%u.%02u tok/s   %u ms/token",
+            (u16)(t100 / 100), (u16)(t100 % 100),
+            (u16)((frames * 1000UL) / (60UL * BENCH_TOKENS)));
+    VDP_drawText(buf, 6, 12);
+    VDP_drawText("(NTSC 60Hz, cycle-accurate)", 6, 14);
+    while (TRUE) SYS_doVBlankProcess();
+}
+#endif
 
 int main(bool hardReset)
 {

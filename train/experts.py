@@ -13,7 +13,6 @@ past it.
 import ast, re
 from pathlib import Path
 
-V5 = Path("/home/scott/legend-of-elya-n64/train_sophia_v5.py")
 
 EXPERTS = [
     ("identity", [
@@ -44,14 +43,10 @@ N_EXPERTS = len(EXPERTS)
 NAMES = [n for n, _ in EXPERTS]
 
 def load_corpus():
-    tree = ast.parse(V5.read_text())
-    out = {}
-    for node in ast.walk(tree):
-        if (isinstance(node, ast.Assign) and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)
-                and node.targets[0].id in ("QA_PAIRS", "CORPUS_LINES")):
-            out[node.targets[0].id] = ast.literal_eval(node.value)
-    return out["QA_PAIRS"], out["CORPUS_LINES"]
+    """Canonical corpus, vendored in-repo (train/corpus.json)."""
+    import json
+    d = json.loads((Path(__file__).resolve().parent / "corpus.json").read_text())
+    return d["QA_PAIRS"], d["CORPUS_LINES"]
 
 def classify(line):
     """Return expert index for a corpus line, or None if it matches none."""

@@ -1,8 +1,16 @@
 # Making a 7.67 MHz 68000 Think — Speed Plan & Measured Results
 
-Everything here was measured, not estimated. Where a technique failed, the
-failure is written down; the negative results are the most useful part of
-this document.
+Each claim below states **which machine it was measured on**. That
+distinction is load-bearing and an earlier version of this document
+elided it: the headline speedup was measured on an x86 host, not on a
+68000, and the honest 68000 figure is much smaller. Where a technique
+failed, the failure is written down; the negative results are the most
+useful part of this document.
+
+⚠️ **Measurement debt (open):** no timing has yet been taken on a 68000,
+cycle-accurate emulator or otherwise. Until that exists, every speed
+number here is a host-x86 proxy or a static estimate, and is labelled as
+such.
 
 ## Baseline economics
 
@@ -34,14 +42,35 @@ lists — they cost nothing at all, not even a test.
 row := u16 n_add, u16 n_sub, n_add index bytes, n_sub index bytes
 ```
 
-| | µs/token (host x86) |
+| | µs/token (**host x86**, not 68000) |
 |---|---|
 | SGT1 2-bit packed | 403.8 |
 | **SGT2 index streams** | **35.6** |
 
-**11.3x, byte-identical output** — proven by `host/sgt1_to_sgt2.py`, which
-converts a blob between formats so both engines can be run against the
-same weights and diffed.
+**11.3x on the x86 host harness.** The 68000 speedup is **UNMEASURED**;
+static estimate **~1.7-3x**. The gap is not a rounding error, it is the
+instrument: SGT1's inner loop has a data-dependent 3-way branch per
+weight, which an out-of-order x86 punishes at ~15-20 cycles per
+misprediction, while the 68000 has no branch predictor to mispredict (a
+taken branch is a flat 10 cycles). The ratio is therefore dominated by
+x86-specific effects that do not exist on the target.
+
+Static estimate, from the cycle table above and the measured 58-65%
+nonzero density (98,304 weights/token):
+  SGT1 ~45-55 cy/weight  -> ~4.5-5.0M cycles/token
+  SGT2 ~36-46 cy/nonzero -> ~2.3-2.9M cycles/token
+
+The direction and the structural argument (trade ROM for decode cycles)
+hold. The magnitude does not transfer.
+
+Equivalence: `host/sgt1_to_sgt2.py` converts a blob between formats so
+both engines run on the same weights. ⚠️ The comparison performed was
+**greedy generations over 6 prompts**, which is a lossy observer — two
+engines can differ in every logit and still emit identical text. The
+claim this supports is "identical greedy output on 6 short prompts", NOT
+"byte-identical output". A logit-exact suite over random prompts
+(including length > CTX, the full byte range, and all-positive /
+all-negative rows) is owed.
 
 Cost: 2.02x ROM (41.5KB → 83.7KB). On a 4MB cartridge that is free. This
 is the T2 doctrine from PORT_PLAN.md: **ROM is cheap, decode cycles are

@@ -42,15 +42,24 @@ V5 = Path("/home/scott/legend-of-elya-n64/train_sophia_v5.py")
 device = "cuda" if torch.cuda.is_available() else "cpu"
 torch.manual_seed(42); random.seed(42); np.random.seed(42)
 
-# ── Corpus: extract QA_PAIRS / CORPUS_LINES from the N64 trainer ──────────
-tree = ast.parse(V5.read_text())
-lists = {}
-for node in ast.walk(tree):
-    if isinstance(node, ast.Assign) and len(node.targets) == 1 \
-       and isinstance(node.targets[0], ast.Name) \
-       and node.targets[0].id in ("QA_PAIRS", "CORPUS_LINES"):
-        lists[node.targets[0].id] = ast.literal_eval(node.value)
-QA_PAIRS, CORPUS_LINES = lists["QA_PAIRS"], lists["CORPUS_LINES"]
+# ── Corpus: vendored in-repo so a fresh clone builds ──────────────────
+import json as _json
+_c = _json.loads((HERE / "corpus.json").read_text())
+QA_PAIRS, CORPUS_LINES = _c["QA_PAIRS"], _c["CORPUS_LINES"]
+
+# EG_SHARD=<name> trains on ONE expert shard only. This is the capacity
+# control: if a 114K model can speak cleanly when it only has to memorize
+# ~30 QA pairs, capacity was the bottleneck and the MoE premise holds. If
+# it still babbles, the bottleneck is the QAT noise floor and sharding
+# cannot fix it.
+_SHARD = _os.environ.get("EG_SHARD", "")
+if _SHARD:
+    import experts as _X
+    _idx = _X.NAMES.index(_SHARD)
+    _shards, _r, _g = _X.shard()
+    QA_PAIRS = [l for l in _shards[_idx] if ":" in l]
+    CORPUS_LINES = []
+    print(f"SHARD MODE: {_SHARD} ({len(QA_PAIRS)} lines only)")
 
 # v4: PURE QA corpus - the game only ever asks these; let the tiny
 # model memorize its script instead of diluting over lore lines
