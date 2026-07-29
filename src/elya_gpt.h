@@ -58,6 +58,8 @@ typedef struct {
 
 typedef struct {
     const int8_t  *emb;      /* vocab x embed, Q2.6 */
+    const int8_t  *pe;       /* ctx x embed, Q2.6 — NULL if the blob has
+                              * no positional encoding (SGT2)          */
     const uint8_t *explut;   /* u16be[256], Q14     */
     EgTensor router;         /* embed -> n_experts, ternary          */
     uint16_t n_experts;

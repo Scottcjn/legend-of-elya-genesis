@@ -40,6 +40,11 @@ QA_REPEAT  = int(_os.environ.get("EG_QA_REPEAT", "1200"))
 #   already sums duplicates correctly. It buys precision exactly where
 #   ternary throws it away: on the weights that matter most.
 LEVELS = int(_os.environ.get("EG_LEVELS", "1"))
+# EG_PE=1 adds learned absolute positional encoding. The single-shard
+# result showed answers that start correct and degrade after 13-28
+# characters - a POSITIONAL failure, not a capacity one. This is the fix
+# that shape predicts.
+USE_PE = int(_os.environ.get("EG_PE", "0")) == 1
 
 HERE = Path(__file__).resolve().parent
 OUT_BIN = HERE.parent / "res" / "elya_genesis.bin"
@@ -157,12 +162,27 @@ class ElyaGPT(nn.Module):
         super().__init__()
         self.emb = nn.Embedding(VOCAB, N_EMBED)
         nn.init.normal_(self.emb.weight, std=0.3)
+        # Learned ABSOLUTE positional embedding, added to the token
+        # embedding before the layers. Chosen over RoPE/ALiBi because:
+        #  - inference cost on a 68000 is 64 adds per token (nothing);
+        #  - RoPE needs per-dimension multiplies the 68000 cannot afford;
+        #  - and crucially it PRESERVES THE KV RING BUFFER: position is
+        #    baked into each cached K/V at store time, so the attention
+        #    sum stays order-invariant over the cached set and
+        #    overwriting the oldest slot is still exactly equivalent.
+        if USE_PE:
+            self.pos = nn.Embedding(CTX, N_EMBED)
+            nn.init.normal_(self.pos.weight, std=0.05)
         self.blocks = nn.ModuleList(Block() for _ in range(N_LAYERS))
         self.ln_f = RMSNorm()
 
     def forward(self, idx):
         ew = fq_emb(self.emb.weight)
-        x = fq_act(ew[idx])
+        x = ew[idx]
+        if USE_PE:
+            T = idx.shape[1]
+            x = x + fq_emb(self.pos.weight)[:T].unsqueeze(0)
+        x = fq_act(x)
         for b in self.blocks:
             x = b(x)
         return self.ln_f(x) @ ew.T          # tied embedding
@@ -313,13 +333,21 @@ def requant(s):
     return M, S
 
 buf = bytearray()
-buf += struct.pack(">4sBBHHHBB", b"SGT2", N_LAYERS, N_HEADS,
-                   N_EMBED, VOCAB, CTX, 3, 0)   # flags: bit0 ternary, bit1 index-streams
+MAGIC = b"SGT3" if USE_PE else b"SGT2"
+FLAGS = 3 | (4 if USE_PE else 0)   # bit0 ternary, bit1 index-streams, bit2 PE
+buf += struct.pack(">4sBBHHHBB", MAGIC, N_LAYERS, N_HEADS,
+                   N_EMBED, VOCAB, CTX, FLAGS, 0)
 
 ew = fq_emb(model.emb.weight).detach().cpu().numpy()
 e8 = np.clip(np.round(ew * 64), -128, 127).astype(np.int8)
 buf += e8.tobytes()
 print(f"\nEmbedding: {e8.size} int8, |max|={np.abs(ew).max():.3f}")
+if USE_PE:
+    pw = fq_emb(model.pos.weight).detach().cpu().numpy()
+    p8 = np.clip(np.round(pw * 64), -128, 127).astype(np.int8)
+    buf += p8.tobytes()
+    print(f"Positional: {p8.size} int8, |max|={np.abs(pw).max():.3f} "
+          f"({p8.size} B = {p8.size/1024:.1f} KB ROM)")
 
 for li, blk in enumerate(model.blocks):
     for name, lin in [("wq", blk.attn.wq), ("wk", blk.attn.wk),

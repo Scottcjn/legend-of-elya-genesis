@@ -359,7 +359,8 @@ int eg_init(EgState *st, const uint8_t *blob)
 
     /* ---- SGT1 / SGT2: single model, treated as one expert ---------- */
 #if EG_FORMAT_INDEX_STREAMS
-    if (blob[3] != '2') return -1;   /* engine built for index streams */
+    /* '2' = index streams, '3' = index streams + positional encoding */
+    if (blob[3] != '2' && blob[3] != '3') return -1;
 #else
     if (blob[3] != '1') return -1;   /* engine built for packed 2-bit  */
 #endif
@@ -371,6 +372,10 @@ int eg_init(EgState *st, const uint8_t *blob)
     const uint8_t *p = blob + 12 + 2;  /* +flags,pad */
     st->emb = (const int8_t *)p;
     p += (uint32_t)EG_VOCAB * EG_EMBED;
+    if (blob[12] & 4) {                /* flags bit2: positional encoding */
+        st->pe = (const int8_t *)p;
+        p += (uint32_t)EG_CTX * EG_EMBED;
+    }
     st->n_experts = 1;
     st->expert_base[0] = p;
 
@@ -428,8 +433,17 @@ uint8_t eg_next_token(EgState *st, uint8_t input)
     /* 1. embedding lookup: int8 Q2.6 -> int16 Q3.12 */
     {
         const int8_t *e = st->emb + (uint32_t)input * EG_EMBED;
-        for (int16_t i = 0; i < EG_EMBED; i++)
-            st->x[i] = (int16_t)(e[i] * 64);   /* Q2.6 -> Q3.12 */
+        if (st->pe) {
+            /* Absolute position, clamped at the context end. Summing in
+             * int16 first is safe: (127+127)*64 = 16256 < 32767. */
+            int16_t pi = (st->pos < EG_CTX) ? st->pos : (EG_CTX - 1);
+            const int8_t *pv = st->pe + (uint32_t)pi * EG_EMBED;
+            for (int16_t i = 0; i < EG_EMBED; i++)
+                st->x[i] = (int16_t)(((int16_t)e[i] + pv[i]) * 64);
+        } else {
+            for (int16_t i = 0; i < EG_EMBED; i++)
+                st->x[i] = (int16_t)(e[i] * 64);   /* Q2.6 -> Q3.12 */
+        }
     }
 
     /* 2. layers */
