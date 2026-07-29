@@ -4,3 +4,9 @@
 {"t": 1785305213, "target": "genesis", "round": 1, "lr": 0.0003, "steps": 40000, "pin": 0.01, "qa_repeat": 1200, "eval_loss": 0.9671, "secs": 1727, "rc": 0, "promoted": true}
 {"t": 1785308253, "target": "n64", "round": 1, "steps": 45000, "eval_loss": 0.2254, "secs": 3040, "rc": 0, "promoted": true}
 {"t": 1785309985, "target": "genesis", "round": 2, "lr": 0.0005, "steps": 40000, "pin": 0.03, "qa_repeat": 1600, "eval_loss": 1.0101, "secs": 1731, "rc": 0, "promoted": false}
+{"t": 1785314036, "target": "n64", "round": 2, "steps": 60000, "eval_loss": 0.2239, "secs": 4051, "rc": 0, "promoted": true}
+{"t": 1785316558, "target": "genesis", "round": 3, "lr": 0.0002, "steps": 60000, "pin": 0.01, "qa_repeat": 1600, "eval_loss": 0.9884, "secs": 2522, "rc": 0, "promoted": false}
+{"t": 1785318606, "target": "n64", "round": 3, "steps": 30000, "eval_loss": 0.2257, "secs": 2047, "rc": 0, "promoted": false}
+{"t": 1785319677, "target": "genesis", "round": 4, "lr": 0.0008, "steps": 25000, "pin": 0.03, "qa_repeat": 800, "eval_loss": 1.0609, "secs": 1071, "rc": 0, "promoted": false}
+{"t": 1785322751, "target": "n64", "round": 4, "steps": 45000, "eval_loss": 0.2248, "secs": 3073, "rc": 0, "promoted": false}
+{"t": 1785325389, "target": "genesis", "round": 5, "lr": 0.0003, "steps": 60000, "pin": 0.003, "qa_repeat": 2000, "eval_loss": 0.9924, "secs": 2637, "rc": 0, "promoted": false}

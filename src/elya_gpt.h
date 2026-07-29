@@ -50,9 +50,19 @@ typedef struct {
     uint8_t  S;              /* requant shift                               */
 } EgTensor;
 
+/* Lock-On MoE: experts live in cartridge ROM and are "activated" by
+ * repointing these tensors (plus a mapper bank write past 4MB). Nothing
+ * is copied — ROM is memory-mapped, so activation is free.
+ * See docs/LOCKON_MOE.md. */
+#define EG_MAX_EXPERTS 16
+
 typedef struct {
     const int8_t  *emb;      /* vocab x embed, Q2.6 */
     const uint8_t *explut;   /* u16be[256], Q14     */
+    EgTensor router;         /* embed -> n_experts, ternary          */
+    uint16_t n_experts;
+    uint16_t expert;         /* currently activated expert           */
+    const uint8_t *expert_base[EG_MAX_EXPERTS];
     EgTensor wq[EG_LAYERS], wk[EG_LAYERS], wv[EG_LAYERS];
     EgTensor wo[EG_LAYERS], wff1[EG_LAYERS], wff2[EG_LAYERS];
 
@@ -63,10 +73,17 @@ typedef struct {
     int16_t ok;                               /* header validated */
 } EgState;
 
-/* Returns 0 on success, negative on bad blob. */
+/* Returns 0 on success, negative on bad blob. Accepts SGT2 (single
+ * model) and SGTM (Lock-On MoE); a single model is treated as 1 expert. */
 int  eg_init(EgState *st, const uint8_t *blob);
 void eg_reset(EgState *st);
 /* Feed one input byte, get greedy next-token prediction (printable ASCII). */
 uint8_t eg_next_token(EgState *st, uint8_t input);
+
+/* Pick the expert for a prompt (mean-pooled embeddings -> ternary
+ * classifier). Returns the expert id; does not activate it. */
+uint16_t eg_route(EgState *st, const char *prompt);
+/* Activate an expert: repoints the weight tensors. No data is copied. */
+void eg_select_expert(EgState *st, uint16_t expert);
 
 #endif

@@ -223,10 +223,112 @@ static void eg_layer(EgState *st, int16_t li, int16_t slot, int16_t n_ctx)
 
 /* ---- public API -------------------------------------------------------- */
 
+/* Walk one tensor's index-stream rows and return the byte after it. */
+static const uint8_t *eg_scan_tensor(EgTensor *t, const uint8_t *p,
+                                     uint16_t rows, uint32_t wcount)
+{
+    t->M = rd16be(p); p += 2;
+    t->S = *p++;      p++;                    /* pad */
+    t->packed = p;
+#if EG_FORMAT_INDEX_STREAMS
+    for (uint16_t r = 0; r < rows; r++) {
+        uint16_t na = rd16be(p);
+        uint16_t ns = rd16be(p + 2);
+        p += 4 + na + ns;
+    }
+    (void)wcount;
+#else
+    (void)rows;
+    p += wcount >> 2;
+#endif
+    return p;
+}
+
+/* Point the six per-layer tensors at an expert's weight block. This is
+ * the whole cost of "activating" an expert — ROM is memory-mapped, so
+ * nothing is copied. */
+void eg_select_expert(EgState *st, uint16_t expert)
+{
+    if (expert >= st->n_experts) expert = 0;
+    st->expert = expert;
+    const uint8_t *p = st->expert_base[expert];
+    for (int16_t li = 0; li < EG_LAYERS; li++) {
+        p = eg_scan_tensor(&st->wq[li],   p, EG_EMBED, EG_EMBED * EG_EMBED);
+        p = eg_scan_tensor(&st->wk[li],   p, EG_EMBED, EG_EMBED * EG_EMBED);
+        p = eg_scan_tensor(&st->wv[li],   p, EG_EMBED, EG_EMBED * EG_EMBED);
+        p = eg_scan_tensor(&st->wo[li],   p, EG_EMBED, EG_EMBED * EG_EMBED);
+        p = eg_scan_tensor(&st->wff1[li], p, EG_FFN,
+                           (uint32_t)EG_FFN * EG_EMBED);
+        p = eg_scan_tensor(&st->wff2[li], p, EG_EMBED,
+                           (uint32_t)EG_EMBED * EG_FFN);
+    }
+}
+
+uint16_t eg_route(EgState *st, const char *prompt)
+{
+    if (st->n_experts <= 1) return 0;
+
+    /* mean-pool the prompt's embeddings (int8 Q2.6 -> int16 Q3.12) */
+    int16_t pooled[EG_EMBED];
+    int32_t acc[EG_EMBED];
+    uint16_t n = 0;
+    for (int16_t i = 0; i < EG_EMBED; i++) acc[i] = 0;
+    for (const char *c = prompt; *c; c++) {
+        const int8_t *e = st->emb + (uint32_t)(uint8_t)*c * EG_EMBED;
+        for (int16_t i = 0; i < EG_EMBED; i++) acc[i] += e[i];
+        n++;
+    }
+    if (n == 0) return 0;
+    for (int16_t i = 0; i < EG_EMBED; i++)
+        pooled[i] = sat16((acc[i] / (int16_t)n) << 6);
+
+    int16_t logits[EG_MAX_EXPERTS];
+    eg_matvec(&st->router, pooled, logits, EG_EMBED, (int16_t)st->n_experts);
+
+    uint16_t best = 0;
+    for (uint16_t e = 1; e < st->n_experts; e++)
+        if (logits[e] > logits[best]) best = e;
+    return best;
+}
+
 int eg_init(EgState *st, const uint8_t *blob)
 {
     memset(st, 0, sizeof(*st));
     if (blob[0] != 'S' || blob[1] != 'G' || blob[2] != 'T') return -1;
+
+    /* ---- SGTM: Lock-On MoE (shared embedding + N banked experts) ---- */
+    if (blob[3] == 'M') {
+#if !EG_FORMAT_INDEX_STREAMS
+        return -1;                     /* MoE is index-stream only */
+#else
+        uint16_t ne = blob[4];
+        if (ne == 0 || ne > EG_MAX_EXPERTS) return -5;
+        if (blob[5] != EG_LAYERS || blob[6] != EG_HEADS) return -2;
+        if (rd16be(blob + 8) != EG_EMBED || rd16be(blob + 10) != EG_VOCAB)
+            return -3;
+        if (rd16be(blob + 12) != EG_CTX) return -4;
+
+        const uint8_t *p = blob + 16;          /* after flags */
+        st->emb = (const int8_t *)p;
+        p += (uint32_t)EG_VOCAB * EG_EMBED;
+        st->explut = p;
+        p += 512;
+        p = eg_scan_tensor(&st->router, p, ne, (uint32_t)ne * EG_EMBED);
+
+        st->n_experts = ne;
+        for (uint16_t e = 0; e < ne; e++) {
+            uint32_t off = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16)
+                         | ((uint32_t)p[2] << 8)  | p[3];
+            p += 4;
+            st->expert_base[e] = blob + off;
+        }
+        st->ok = 1;
+        eg_select_expert(st, 0);
+        return 0;
+#endif
+    }
+
+    /* ---- SGT1 / SGT2: single model, treated as one expert ---------- */
 #if EG_FORMAT_INDEX_STREAMS
     if (blob[3] != '2') return -1;   /* engine built for index streams */
 #else
@@ -240,6 +342,8 @@ int eg_init(EgState *st, const uint8_t *blob)
     const uint8_t *p = blob + 12 + 2;  /* +flags,pad */
     st->emb = (const int8_t *)p;
     p += (uint32_t)EG_VOCAB * EG_EMBED;
+    st->n_experts = 1;
+    st->expert_base[0] = p;
 
     for (int16_t li = 0; li < EG_LAYERS; li++) {
         EgTensor *order[6];

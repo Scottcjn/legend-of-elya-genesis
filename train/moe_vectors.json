@@ -1,0 +1,32 @@
+[
+  {
+    "prompt": "Who are you?: ",
+    "expert": 0,
+    "expect": "                                                            "
+  },
+  {
+    "prompt": "What is your name?: ",
+    "expert": 0,
+    "expect": "                                                            "
+  },
+  {
+    "prompt": "What is RustChain?: ",
+    "expert": 2,
+    "expect": "                                                            "
+  },
+  {
+    "prompt": "What is the G4?: ",
+    "expert": 0,
+    "expect": "                                                            "
+  },
+  {
+    "prompt": "Tell me about this dungeon.: ",
+    "expert": 1,
+    "expect": "                                                            "
+  },
+  {
+    "prompt": "How do I earn RTC?: ",
+    "expert": 0,
+    "expect": "                                                            "
+  }
+]
