@@ -1,0 +1,4 @@
+Corpus: 6,942,300 bytes  QA=122  BG=303
+Parameters: 114,688  device=cuda
+       0/25000  loss=16.6723  best=16.6723  1s
+    2500/25000  loss=1.7263  best=1.6459  98s

@@ -3,10 +3,8 @@
  * See elya_gpt.h for format. Mirrors train/train_elya_genesis.py QAT
  * semantics: any rounding done here was fake-quantized during training.
  */
-#include "elya_gpt.h"
-#ifdef SGDK_GCC
-#include <genesis.h>       /* SGDK's string.h needs its types loaded first */
-#else
+#include "elya_gpt.h"      /* pulls genesis.h (SGDK) or stdint.h (host)   */
+#ifndef SGDK_GCC
 #include <string.h>
 #endif
 

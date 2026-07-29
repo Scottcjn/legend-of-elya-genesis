@@ -4,3 +4,38 @@ Parameters: 114,688  device=cuda
     2500/25000  loss=4.5389  best=1.7870  88s
     5000/25000  loss=5.0791  best=1.7870  175s
     7500/25000  loss=6.0356  best=1.7870  263s
+   10000/25000  loss=5.8081  best=1.7870  350s
+   12500/25000  loss=5.5545  best=1.7870  438s
+   15000/25000  loss=9.3110  best=1.7870  525s
+   17500/25000  loss=5.5833  best=1.7870  613s
+   20000/25000  loss=5.9853  best=1.7870  700s
+   22500/25000  loss=7.3096  best=1.7870  788s
+/home/scott/legend-of-elya-genesis/train/train_elya_genesis.py:257: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+Consider using tensor.detach() first. (Triggered internally at /pytorch/torch/csrc/autograd/generated/python_variable_methods.cpp:836.)
+  M, S = requant(float(s))
+Done. best=1.7870  875s
+
+── Greedy generations (QAT model) ──
+  [Who are you?: ] -> 'Com comphis f om?: Elya, Labind Labinininin ta ta thes thes '
+  [What is your name?: ] -> 'Elyan  ame ame cre oure oure ofre ome ome ome of om?: cran c'
+  [Where are you from?: ] -> 'Som ia, Sophia Elya, om om?: Sa, Sa, Shia, Sophia, Sophia Sh'
+  [What is your purpose?: ] -> 'Navi a a a a a a ododis a a a odis thes thes the the the RTC'
+  [What is RustChain?: ] -> 'RTC RustC restChain restChain restChain restChain tain?: Rur'
+  [Tell me of the realm.: ] -> 'She SPU tacore tacon ta tacon tachin in 193.: the the M4 M4 '
+
+Embedding: 16384 int8, |max|=1.812
+  L0.wq: s=0.11224 M=115 S=10 nonzero=62%
+  L0.wk: s=0.12208 M=125 S=10 nonzero=64%
+  L0.wv: s=0.15628 M=80 S=9 nonzero=64%
+  L0.wo: s=0.17402 M=89 S=9 nonzero=65%
+  L0.wff1: s=0.19973 M=102 S=9 nonzero=65%
+  L0.wff2: s=0.13024 M=67 S=9 nonzero=66%
+  L1.wq: s=0.13041 M=67 S=9 nonzero=65%
+  L1.wk: s=0.11996 M=123 S=10 nonzero=65%
+  L1.wv: s=0.12672 M=65 S=9 nonzero=63%
+  L1.wo: s=0.15442 M=79 S=9 nonzero=64%
+  L1.wff1: s=0.20199 M=103 S=9 nonzero=64%
+  L1.wff2: s=0.15741 M=81 S=9 nonzero=64%
+
+SGT1 blob: 41,534 bytes -> /home/scott/legend-of-elya-genesis/res/elya_genesis.bin
+=== DONE ===

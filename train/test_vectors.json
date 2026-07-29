@@ -1,0 +1,26 @@
+[
+  {
+    "prompt": "Who are you?: ",
+    "expect": "Com comphis f om?: Elya, Labind Labinininin ta ta thes thes "
+  },
+  {
+    "prompt": "What is your name?: ",
+    "expect": "Elyan  ame ame cre oure oure ofre ome ome ome of om?: cran c"
+  },
+  {
+    "prompt": "Where are you from?: ",
+    "expect": "Som ia, Sophia Elya, om om?: Sa, Sa, Shia, Sophia, Sophia Sh"
+  },
+  {
+    "prompt": "What is your purpose?: ",
+    "expect": "Navi a a a a a a ododis a a a odis thes thes the the the RTC"
+  },
+  {
+    "prompt": "What is RustChain?: ",
+    "expect": "RTC RustC restChain restChain restChain restChain tain?: Rur"
+  },
+  {
+    "prompt": "Tell me of the realm.: ",
+    "expect": "She SPU tacore tacon ta tacon tachin in 193.: the the M4 M4 "
+  }
+]

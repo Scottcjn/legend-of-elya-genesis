@@ -17,7 +17,11 @@
 #ifndef ELYA_GPT_H
 #define ELYA_GPT_H
 
+#ifdef SGDK_GCC
+#include <genesis.h>   /* SGDK maps int8_t & co. onto its own s8/u8 types */
+#else
 #include <stdint.h>
+#endif
 
 #define EG_LAYERS 2
 #define EG_EMBED  64

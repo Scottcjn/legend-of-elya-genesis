@@ -133,6 +133,197 @@ static void setMouth(u16 m)
 }
 
 /* ------------------------------------------------------------------ */
+/* The Dreamscape — fake-2D on BG_B (PAL2)                            */
+/* Starfield + crescent moon above, perspective checkerboard floor    */
+/* below via per-scanline hscroll (the Space Harrier trick). Animated */
+/* from the VBlank interrupt so the dream keeps moving even while the */
+/* 68000 is deep inside a forward pass (T7 doctrine).                 */
+/* ------------------------------------------------------------------ */
+#define DS_TILE_INDEX  (FACE_TILE_INDEX + FACE_TILES)
+/* tile roles (offset from DS_TILE_INDEX) */
+#define DT_STAR1   0
+#define DT_STAR2   1
+#define DT_CHECK_A 2
+#define DT_CHECK_B 3
+#define DT_HORIZ1  4
+#define DT_HORIZ2  5
+#define DT_MOON    6   /* 6..9: 2x2 crescent */
+#define DS_NTILES  10
+
+#define HORIZON_ROW 14          /* tile row where the floor begins    */
+#define FLOOR_ROW   16
+#define FLOOR_ROWS  12
+
+/* dreamscape colors, PAL2 */
+#define DC_WHITE  1
+#define DC_CYAN   2
+#define DC_GOLD   3
+#define DC_CHK_A  4
+#define DC_CHK_B  5
+#define DC_GLOW1  6
+#define DC_GLOW2  7
+
+static u32 dsTiles[DS_NTILES * 8];
+static vu32 dsFrame = 0;
+static s16 dsScroll[FLOOR_ROWS * 8];
+
+static void dsSetPix(u16 tile, u16 x, u16 y, u16 c)
+{
+    u32 *row = &dsTiles[tile * 8 + y];
+    u16 shift = (7 - x) * 4;
+    *row = (*row & ~((u32)0xF << shift)) | ((u32)c << shift);
+}
+
+static void buildDreamTiles(void)
+{
+    memset(dsTiles, 0, sizeof(dsTiles));
+
+    /* star 1: single twinkle dot */
+    dsSetPix(DT_STAR1, 3, 3, DC_WHITE);
+    /* star 2: small plus */
+    dsSetPix(DT_STAR2, 5, 4, DC_CYAN);
+    dsSetPix(DT_STAR2, 5, 6, DC_CYAN);
+    dsSetPix(DT_STAR2, 4, 5, DC_CYAN);
+    dsSetPix(DT_STAR2, 6, 5, DC_CYAN);
+    dsSetPix(DT_STAR2, 5, 5, DC_WHITE);
+
+    /* solid checker tiles */
+    for (u16 y = 0; y < 8; y++)
+        for (u16 x = 0; x < 8; x++) {
+            dsSetPix(DT_CHECK_A, x, y, DC_CHK_A);
+            dsSetPix(DT_CHECK_B, x, y, DC_CHK_B);
+        }
+
+    /* horizon glow bands */
+    for (u16 y = 0; y < 8; y++)
+        for (u16 x = 0; x < 8; x++) {
+            dsSetPix(DT_HORIZ1, x, y, (y < 5) ? 0 : DC_GLOW2);
+            dsSetPix(DT_HORIZ2, x, y, (y < 3) ? DC_GLOW2 : DC_GLOW1);
+        }
+
+    /* crescent moon on a 16x16 grid across 4 tiles (2x2) */
+    for (s16 y = 0; y < 16; y++) {
+        for (s16 x = 0; x < 16; x++) {
+            s16 dx = x - 8, dy = y - 8;
+            s16 ex = x - 11, ey = y - 7;   /* bite offset */
+            bool in  = (dx * dx + dy * dy) < 49;
+            bool out = (ex * ex + ey * ey) < 36;
+            if (in && !out) {
+                u16 t = DT_MOON + ((y >> 3) << 1) + (x >> 3);
+                dsSetPix(t, x & 7, y & 7, DC_GOLD);
+            }
+        }
+    }
+
+    VDP_loadTileData(dsTiles, DS_TILE_INDEX, DS_NTILES, DMA);
+}
+
+static void buildDreamMap(void)
+{
+    /* sky: sparse pseudo-random stars (deterministic hash scatter) */
+    for (u16 y = 0; y < HORIZON_ROW; y++) {
+        for (u16 x = 0; x < 64; x++) {
+            u16 h = (u16)(x * 31 + y * 17 + ((x * y) >> 2));
+            u16 t = 0;
+            if ((h & 31) == 0)      t = DS_TILE_INDEX + DT_STAR1;
+            else if ((h & 63) == 9) t = DS_TILE_INDEX + DT_STAR2;
+            if (t)
+                VDP_setTileMapXY(BG_B,
+                    TILE_ATTR_FULL(PAL2, FALSE, FALSE, FALSE, t), x, y);
+        }
+    }
+
+    /* moon, top right */
+    for (u16 dy = 0; dy < 2; dy++)
+        for (u16 dx = 0; dx < 2; dx++)
+            VDP_setTileMapXY(BG_B,
+                TILE_ATTR_FULL(PAL2, FALSE, FALSE, FALSE,
+                               DS_TILE_INDEX + DT_MOON + dy * 2 + dx),
+                33 + dx, 2 + dy);
+
+    /* horizon glow */
+    for (u16 x = 0; x < 64; x++) {
+        VDP_setTileMapXY(BG_B, TILE_ATTR_FULL(PAL2, FALSE, FALSE, FALSE,
+                         DS_TILE_INDEX + DT_HORIZ1), x, HORIZON_ROW);
+        VDP_setTileMapXY(BG_B, TILE_ATTR_FULL(PAL2, FALSE, FALSE, FALSE,
+                         DS_TILE_INDEX + DT_HORIZ2), x, HORIZON_ROW + 1);
+    }
+
+    /* checkerboard floor: checks widen toward the viewer (fake depth) */
+    for (u16 r = 0; r < FLOOR_ROWS; r++) {
+        u16 w = (r < 4) ? 0 : (r < 8) ? 1 : 2;   /* 1-, 2-, 4-tile checks */
+        u16 g = r >> 2;
+        for (u16 x = 0; x < 64; x++) {
+            u16 a = (((x >> w) + g) & 1);
+            VDP_setTileMapXY(BG_B,
+                TILE_ATTR_FULL(PAL2, FALSE, FALSE, FALSE,
+                    DS_TILE_INDEX + (a ? DT_CHECK_A : DT_CHECK_B)),
+                x, FLOOR_ROW + r);
+        }
+    }
+}
+
+/* runs every vblank — the dream animates even while Elya thinks */
+static void dreamscapeVInt(void)
+{
+    dsFrame++;
+
+    /* floor: lower scanlines scroll faster = perspective illusion */
+    u16 i = 0;
+    for (u16 r = 0; r < FLOOR_ROWS; r++) {
+        s16 v = -(s16)((dsFrame * (r + 3)) >> 3);
+        for (u16 l = 0; l < 8; l++) dsScroll[i++] = v;
+    }
+    VDP_setHorizontalScrollLine(BG_B, FLOOR_ROW * 8, dsScroll,
+                                FLOOR_ROWS * 8, CPU);
+
+    /* star twinkle: cycle brightness every 16 frames */
+    switch ((dsFrame >> 4) & 3) {
+        case 0: PAL_setColor(32 + DC_WHITE, RGB24_TO_VDPCOLOR(0xFFFFFF)); break;
+        case 1: PAL_setColor(32 + DC_WHITE, RGB24_TO_VDPCOLOR(0xA0A0C0)); break;
+        case 2: PAL_setColor(32 + DC_WHITE, RGB24_TO_VDPCOLOR(0x606080)); break;
+        case 3: PAL_setColor(32 + DC_WHITE, RGB24_TO_VDPCOLOR(0xC0C0E0)); break;
+    }
+}
+
+static void initDreamscape(void)
+{
+    /* PAL2: dream colors */
+    PAL_setColor(32 + DC_WHITE, RGB24_TO_VDPCOLOR(0xFFFFFF));
+    PAL_setColor(32 + DC_CYAN,  RGB24_TO_VDPCOLOR(0x60C0E0));
+    PAL_setColor(32 + DC_GOLD,  RGB24_TO_VDPCOLOR(0xE0D090));
+    PAL_setColor(32 + DC_CHK_A, RGB24_TO_VDPCOLOR(0x483070)); /* deep violet */
+    PAL_setColor(32 + DC_CHK_B, RGB24_TO_VDPCOLOR(0x101838)); /* midnight   */
+    PAL_setColor(32 + DC_GLOW1, RGB24_TO_VDPCOLOR(0x8040A0)); /* dream glow */
+    PAL_setColor(32 + DC_GLOW2, RGB24_TO_VDPCOLOR(0xC060A0));
+    /* backdrop: deep navy night */
+    PAL_setColor(0, RGB24_TO_VDPCOLOR(0x000818));
+
+    buildDreamTiles();
+    buildDreamMap();
+
+    /* per-line hscroll; BG_A stays put (zeroed table) */
+    VDP_setScrollingMode(HSCROLL_LINE, VSCROLL_PLANE);
+    {
+        static s16 zeros[224];
+        memset(zeros, 0, sizeof(zeros));
+        VDP_setHorizontalScrollLine(BG_A, 0, zeros, 224, CPU);
+        VDP_setHorizontalScrollLine(BG_B, 0, zeros, 224, CPU);
+    }
+    SYS_setVIntCallback(dreamscapeVInt);
+}
+
+/* ELYAAAN — boot splash, Sophia's digitized voice through the DAC */
+static void elyanSplash(void)
+{
+    VDP_drawText("E L Y A N", 15, 12);
+    SND_startPlay_PCM(elyan_chant, sizeof(elyan_chant),
+                      SOUND_RATE_16000, SOUND_PAN_CENTER, FALSE);
+    for (u16 f = 0; f < 150; f++) SYS_doVBlankProcess();
+    VDP_clearTextArea(15, 12, 10, 1);
+}
+
+/* ------------------------------------------------------------------ */
 /* Inference-driven dialog                                            */
 /* ------------------------------------------------------------------ */
 static const char *prompts[] = {
@@ -219,6 +410,9 @@ int main(bool hardReset)
     PAL_setColor(16 + CI_MOUTH,   RGB24_TO_VDPCOLOR(0x902030));
     PAL_setColor(16 + CI_OUTLINE, RGB24_TO_VDPCOLOR(0x402020));
     PAL_setColor(16 + CI_BLUSH,   RGB24_TO_VDPCOLOR(0xE09080));
+
+    initDreamscape();
+    elyanSplash();
 
     VDP_drawText("ELYA INTO DREAMS", 12, 1);
     VDP_drawText("A transformer dreams on the 68000", 3, 2);

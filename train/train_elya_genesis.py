@@ -158,7 +158,7 @@ def batch(bs=512):
     y = torch.stack([data_arr[i+1:i+CTX+1] for i in ix])
     return x.to(device), y.to(device)
 
-opt = torch.optim.AdamW(model.parameters(), lr=5e-3, weight_decay=0.01,
+opt = torch.optim.AdamW(model.parameters(), lr=1.5e-3, weight_decay=0.01,
                         betas=(0.9, 0.95))
 sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=N_STEPS, eta_min=5e-5)
 
@@ -189,7 +189,9 @@ def gen_greedy(prompt, n=60):
     out = []
     for _ in range(n):
         lg = model(x[:, -CTX:])[0, -1]
+        nl = lg[10].item()              # newline competes as stop token,
         lg[:32] = float("-inf"); lg[127:] = float("-inf")
+        lg[10] = nl                     # matching the C engine exactly
         t = int(lg.argmax())
         out.append(t)
         x = torch.cat([x, torch.tensor([[t]], device=device)], dim=1)
