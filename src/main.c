@@ -1,32 +1,32 @@
 /*
- * Legend of Elya — Sega Genesis (Mega Drive) port
- * P0 scaffold: Elya face + mouth-flap animation synced to streaming dialog.
+ * ELYA INTO DREAMS — Sega Genesis / Mega Drive
+ * World-first: on-console transformer inference on the Motorola 68000.
  *
- * The token source here is a stub streamer; it gets replaced by the
- * ternary nano-GPT core in P1/P2 (see docs/PORT_PLAN.md). The dialog
- * pipeline, mouth sync, and tok/s counter are the real, final plumbing.
+ * P1: real integer-only nano-GPT (src/elya_gpt.c) replaces the P0 stub.
+ * Ternary weights live in cartridge ROM (res/elya_genesis.bin, SGT1).
+ * Elya's mouth animates per generated token; tok/s counter is genuine.
  *
- * Target: Model 1 Genesis (1601). Built with SGDK.
+ * Target: Model 1 Genesis (1601). Built with marsdev / SGDK 1.81.
  */
 
 #include <genesis.h>
+#include "elya_gpt.h"
+#include "resources.h"
 
 /* ------------------------------------------------------------------ */
 /* Palette — PAL1 is Elya's face palette                              */
 /* ------------------------------------------------------------------ */
-#define CI_BG      0   /* transparent          */
+#define CI_BG      0
 #define CI_SKIN    1
 #define CI_HAIR    2   /* auburn — canon: long auburn hair */
-#define CI_HAIR_D  3   /* auburn shadow        */
-#define CI_EYE     4   /* green                */
+#define CI_HAIR_D  3
+#define CI_EYE     4
 #define CI_MOUTH   5
 #define CI_OUTLINE 6
 #define CI_BLUSH   7
 
 /* ------------------------------------------------------------------ */
-/* Elya face: 32x32 px = 4x4 tiles, generated procedurally into RAM,  */
-/* then uploaded. Mouth tiles are regenerated per animation frame and */
-/* re-uploaded (512B — trivial next to a DMA queue).                  */
+/* Elya face: 32x32 px = 4x4 tiles, procedural (art pass comes later) */
 /* ------------------------------------------------------------------ */
 #define FACE_TILE_INDEX  TILE_USER_INDEX
 #define FACE_W  32
@@ -36,7 +36,6 @@
 static u8  facePix[FACE_H][FACE_W];
 static u32 faceTiles[FACE_TILES * 8];
 
-/* mouth states */
 enum { MOUTH_CLOSED = 0, MOUTH_OPEN = 1, MOUTH_WIDE = 2 };
 static u16 mouthState = MOUTH_CLOSED;
 
@@ -44,20 +43,15 @@ static void drawFacePixels(u16 mouth)
 {
     memset(facePix, CI_BG, sizeof(facePix));
 
-    /* hair: full head cap + long side falls (rows 2..31 at the edges) */
     for (s16 y = 2; y < 32; y++) {
         for (s16 x = 2; x < 30; x++) {
-            /* side falls */
             if (x < 7 || x > 24) {
                 if (y > 4) facePix[y][x] = (x < 4 || x > 27) ? CI_HAIR_D : CI_HAIR;
                 continue;
             }
-            /* top cap */
             if (y < 9) facePix[y][x] = (y < 4) ? CI_HAIR_D : CI_HAIR;
         }
     }
-
-    /* face oval: x 7..24, y 8..27 with softened corners */
     for (s16 y = 8; y < 28; y++) {
         for (s16 x = 7; x < 25; x++) {
             s16 dx = x - 15, dy = y - 17;
@@ -66,28 +60,19 @@ static void drawFacePixels(u16 mouth)
             if (dx + dy < 17) facePix[y][x] = CI_SKIN;
         }
     }
-
-    /* bangs overlap the brow */
     for (s16 x = 7; x < 25; x++) {
         facePix[8][x] = CI_HAIR;
         if ((x & 3) != 1) facePix[9][x] = CI_HAIR;
         if ((x & 3) == 2) facePix[10][x] = CI_HAIR;
     }
-
-    /* eyes: green, 3px wide at y 14..15 */
     for (s16 x = 10; x < 13; x++) { facePix[14][x] = CI_EYE; facePix[15][x] = CI_EYE; }
     for (s16 x = 19; x < 22; x++) { facePix[14][x] = CI_EYE; facePix[15][x] = CI_EYE; }
     facePix[13][10] = CI_OUTLINE; facePix[13][11] = CI_OUTLINE; facePix[13][12] = CI_OUTLINE;
     facePix[13][19] = CI_OUTLINE; facePix[13][20] = CI_OUTLINE; facePix[13][21] = CI_OUTLINE;
-
-    /* blush */
     facePix[18][9]  = CI_BLUSH; facePix[18][10] = CI_BLUSH;
     facePix[18][21] = CI_BLUSH; facePix[18][22] = CI_BLUSH;
-
-    /* nose hint */
     facePix[18][15] = CI_OUTLINE; facePix[19][15] = CI_OUTLINE;
 
-    /* mouth — the animated part (y 22..25, x 12..19) */
     switch (mouth) {
         case MOUTH_CLOSED:
             for (s16 x = 13; x < 19; x++) facePix[23][x] = CI_MOUTH;
@@ -111,7 +96,6 @@ static void drawFacePixels(u16 mouth)
     }
 }
 
-/* pack facePix into 4bpp SGDK tile format and upload */
 static void uploadFace(void)
 {
     u16 t = 0;
@@ -119,9 +103,8 @@ static void uploadFace(void)
         for (u16 tx = 0; tx < FACE_W / 8; tx++) {
             for (u16 row = 0; row < 8; row++) {
                 u32 packed = 0;
-                for (u16 col = 0; col < 8; col++) {
+                for (u16 col = 0; col < 8; col++)
                     packed = (packed << 4) | (facePix[ty * 8 + row][tx * 8 + col] & 0xF);
-                }
                 faceTiles[t * 8 + row] = packed;
             }
             t++;
@@ -140,74 +123,86 @@ static void placeFaceTilemap(u16 px, u16 py)
                 px + tx, py + ty);
 }
 
+static void setMouth(u16 m)
+{
+    if (m != mouthState) {
+        mouthState = m;
+        drawFacePixels(m);
+        uploadFace();
+    }
+}
+
 /* ------------------------------------------------------------------ */
-/* Dialog engine: streams characters, flaps the mouth, counts tok/s.  */
-/* elya_next_token() is the SEAM: the ternary GPT core replaces it.   */
+/* Inference-driven dialog                                            */
 /* ------------------------------------------------------------------ */
-static const char *responses[] = {
-    "I am Elya. This little machine\n"
-    "sings at 7.67 megahertz, and\n"
-    "every word costs real silicon.",
-
-    "No multiplies were harmed in\n"
-    "the making of this sentence.\n"
-    "Add, subtract, or stay silent.",
-
-    "The Model 1 has the best sound\n"
-    "hardware Sega ever shipped.\n"
-    "You chose well, Flameholder.",
-
-    "Blast processing is real if\n"
-    "you precompute hard enough.\n"
-    "ROM remembers so I can think.",
+static const char *prompts[] = {
+    "Who are you?: ",
+    "What is your name?: ",
+    "Where are you from?: ",
+    "What is your purpose?: ",
+    "What is RustChain?: ",
+    "Tell me of the realm.: ",
 };
-#define NUM_RESPONSES  (sizeof(responses) / sizeof(responses[0]))
+#define NUM_PROMPTS (sizeof(prompts) / sizeof(prompts[0]))
 
 #define DIALOG_X 2
 #define DIALOG_Y 20
 #define DIALOG_W 36
+#define DIALOG_H 5
+#define MAX_GEN  100
 
-static const char *streamSrc = NULL;   /* current response being streamed */
-static u16 streamPos = 0;
+static EgState elya;                 /* ~17KB static (KV cache inside) */
+
+enum { ST_IDLE, ST_FEED, ST_GEN };
+static u16 mode = ST_IDLE;
+static u16 promptIdx = 0;
+static const char *curPrompt = NULL;
+static u16 feedPos = 0;
+static u8  lastTok = 0;
+static u16 genCount = 0;
 static u16 col = 0, rowY = 0;
-static u16 charTimer = 0;
-static u16 charPeriod = 6;             /* frames per character (stub pace) */
-static u16 respIndex = 0;
-static u16 talking = FALSE;
-static u32 charsEmitted = 0;
-static u32 talkFrames = 0;
-
-/* SEAM: replace with ternary nano-GPT sampling in P1 */
-static char elya_next_token(void)
-{
-    char c = streamSrc[streamPos];
-    if (c) streamPos++;
-    return c;
-}
+static u32 genStart = 0, genTokens = 0;
+static u16 engineOk = FALSE;
 
 static void clearDialog(void)
 {
-    VDP_clearTextArea(DIALOG_X, DIALOG_Y, DIALOG_W, 6);
+    VDP_clearTextArea(DIALOG_X, DIALOG_Y, DIALOG_W, DIALOG_H);
     col = 0; rowY = 0;
 }
 
-static void startResponse(u16 idx)
+static void putGlyph(char c)
 {
-    streamSrc = responses[idx];
-    streamPos = 0;
-    charsEmitted = 0;
-    talkFrames = 0;
-    talking = TRUE;
-    clearDialog();
+    if (c == '\n') { col = 0; rowY++; return; }
+    char s[2] = { c, 0 };
+    if (rowY < DIALOG_H) VDP_drawText(s, DIALOG_X + col, DIALOG_Y + rowY);
+    col++;
+    if (col >= DIALOG_W) { col = 0; rowY++; }
 }
 
-static void drawStatus(void)
+static void drawTokSpeed(void)
 {
-    char buf[40];
-    /* tok/s ×10 fixed point — avoids float, same as the final engine will */
-    u32 tps10 = talkFrames ? (charsEmitted * 600) / talkFrames : 0;
-    sprintf(buf, "%lu.%lu tok/s [STUB]", (u32)(tps10 / 10), (u32)(tps10 % 10));
-    VDP_drawText(buf, 22, 27);
+    char buf[24];
+    /* x100 fixed point: vblank frames @60Hz -> tok/s (honest wall-clock) */
+    u32 elapsed = vtimer - genStart;
+    u32 t100 = elapsed ? (genTokens * 6000) / elapsed : 0;
+    sprintf(buf, "%lu.%02lu tok/s", (u32)(t100 / 100), (u32)(t100 % 100));
+    VDP_drawText(buf, 26, 27);
+}
+
+static void startPrompt(u16 idx)
+{
+    eg_reset(&elya);
+    curPrompt = prompts[idx];
+    feedPos = 0;
+    genCount = 0;
+    genStart = vtimer;
+    genTokens = 0;
+    mode = ST_FEED;
+    clearDialog();
+    VDP_drawText("Elya dreams", 2, 27);
+    /* echo the question in the dialog box */
+    for (const char *p = curPrompt; *p; p++) putGlyph(*p);
+    putGlyph('\n');
 }
 
 int main(bool hardReset)
@@ -217,72 +212,86 @@ int main(bool hardReset)
     VDP_setScreenWidth320();
     VDP_setTextPalette(PAL0);
 
-    /* Elya's palette */
     PAL_setColor(16 + CI_SKIN,    RGB24_TO_VDPCOLOR(0xF0C8A0));
-    PAL_setColor(16 + CI_HAIR,    RGB24_TO_VDPCOLOR(0xA04020)); /* auburn */
+    PAL_setColor(16 + CI_HAIR,    RGB24_TO_VDPCOLOR(0xA04020));
     PAL_setColor(16 + CI_HAIR_D,  RGB24_TO_VDPCOLOR(0x702010));
-    PAL_setColor(16 + CI_EYE,     RGB24_TO_VDPCOLOR(0x30A050)); /* green  */
+    PAL_setColor(16 + CI_EYE,     RGB24_TO_VDPCOLOR(0x30A050));
     PAL_setColor(16 + CI_MOUTH,   RGB24_TO_VDPCOLOR(0x902030));
     PAL_setColor(16 + CI_OUTLINE, RGB24_TO_VDPCOLOR(0x402020));
     PAL_setColor(16 + CI_BLUSH,   RGB24_TO_VDPCOLOR(0xE09080));
 
-    VDP_drawText("LEGEND OF ELYA", 13, 1);
-    VDP_drawText("Sega Genesis / Mega Drive port", 5, 2);
-    VDP_drawText("PRESS A: Elya speaks", 10, 26);
+    VDP_drawText("ELYA INTO DREAMS", 12, 1);
+    VDP_drawText("A transformer dreams on the 68000", 3, 2);
+
+    if (eg_init(&elya, (const uint8_t *)elya_weights) == 0) {
+        engineOk = TRUE;
+        VDP_drawText("PRESS A: ask Elya", 11, 26);
+    } else {
+        VDP_drawText("WEIGHTS MISSING - STUB ROM", 7, 26);
+    }
 
     drawFacePixels(MOUTH_CLOSED);
     uploadFace();
     placeFaceTilemap(4, 6);
 
-    /* dialog frame */
     for (u16 x = DIALOG_X - 1; x <= DIALOG_X + DIALOG_W; x++) {
         VDP_drawText("-", x, DIALOG_Y - 1);
-        VDP_drawText("-", x, DIALOG_Y + 5);
+        VDP_drawText("-", x, DIALOG_Y + DIALOG_H);
     }
 
     u16 prevJoy = 0;
+    u16 blink = 0;
 
     while (TRUE) {
         u16 joy = JOY_readJoypad(JOY_1);
 
-        if ((joy & BUTTON_A) && !(prevJoy & BUTTON_A) && !talking) {
-            startResponse(respIndex);
-            respIndex = (respIndex + 1) % NUM_RESPONSES;
+        if ((joy & BUTTON_A) && !(prevJoy & BUTTON_A)
+            && mode == ST_IDLE && engineOk) {
+            startPrompt(promptIdx);
+            promptIdx = (promptIdx + 1) % NUM_PROMPTS;
         }
         prevJoy = joy;
 
-        if (talking) {
-            talkFrames++;
-            if (++charTimer >= charPeriod) {
-                charTimer = 0;
-                char c = elya_next_token();
-                if (c == 0) {
-                    talking = FALSE;
-                    mouthState = MOUTH_CLOSED;
-                } else if (c == '\n') {
-                    col = 0;
-                    rowY++;
-                } else {
-                    char s[2] = { c, 0 };
-                    VDP_drawText(s, DIALOG_X + col, DIALOG_Y + rowY);
-                    col++;
-                    if (col >= DIALOG_W) { col = 0; rowY++; }
-                    charsEmitted++;
-                    /* flap: vowels open wide, consonants open, space closes */
-                    if (c == ' ')      mouthState = MOUTH_CLOSED;
-                    else if (c=='a'||c=='e'||c=='i'||c=='o'||c=='u'||
-                             c=='A'||c=='E'||c=='I'||c=='O'||c=='U')
-                                       mouthState = MOUTH_WIDE;
-                    else               mouthState = MOUTH_OPEN;
-                }
-                drawFacePixels(mouthState);
-                uploadFace();
-                drawStatus();
+        switch (mode) {
+        case ST_FEED:
+            /* one forward pass per loop — display stays alive between */
+            lastTok = eg_next_token(&elya, (u8)curPrompt[feedPos]);
+            feedPos++;
+            genTokens++;
+            setMouth((++blink & 1) ? MOUTH_OPEN : MOUTH_CLOSED); /* pondering */
+            if (curPrompt[feedPos] == 0) {
+                mode = ST_GEN;
+                genCount = 0;
             }
-        } else if (mouthState != MOUTH_CLOSED) {
-            mouthState = MOUTH_CLOSED;
-            drawFacePixels(mouthState);
-            uploadFace();
+            drawTokSpeed();
+            break;
+
+        case ST_GEN:
+            if (lastTok == '\n' || genCount >= MAX_GEN
+                || rowY >= DIALOG_H) {
+                mode = ST_IDLE;
+                setMouth(MOUTH_CLOSED);
+                VDP_drawText("PRESS A: ask Elya", 2, 27);
+                break;
+            }
+            putGlyph((char)lastTok);
+            genCount++;
+            genTokens++;
+            /* vowels open wide — she speaks as she thinks */
+            {
+                char c = (char)lastTok;
+                if (c == ' ')      setMouth(MOUTH_CLOSED);
+                else if (c=='a'||c=='e'||c=='i'||c=='o'||c=='u'||
+                         c=='A'||c=='E'||c=='I'||c=='O'||c=='U')
+                                   setMouth(MOUTH_WIDE);
+                else               setMouth(MOUTH_OPEN);
+            }
+            drawTokSpeed();
+            lastTok = eg_next_token(&elya, lastTok);
+            break;
+
+        default:
+            break;
         }
 
         SYS_doVBlankProcess();

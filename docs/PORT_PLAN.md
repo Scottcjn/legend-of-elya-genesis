@@ -108,3 +108,21 @@ tokenizer experiments. ROM trie tokenizer is free (T1 doctrine).
 - Vocab 96 vs 256 vs ROM-trie subwords?
 - Can the Z80 contribute real compute (8-bit partial sums) or is bus
   contention a net loss?
+
+---
+
+## P1 — Locked fixed-point spec (implemented in src/elya_gpt.c)
+
+| Quantity | Format | Range | Notes |
+|---|---|---|---|
+| Activations | int16 Q3.12 | ±8 | fake-quantized in training |
+| KV cache | int8 Q4.4 | ±8 | 16KB total (2L x 64ctx x 64d x 2) |
+| Embedding (tied) | int8 Q2.6 | ±2 | doubles as logit projection |
+| Matmul weights | 2-bit ternary | {-1,0,+1} | code 11 reserved for tetranary ±2 |
+| Requant | (acc*M)>>S, M≤127 | — | int32-safe: 2^23 * 2^7 < 2^31 |
+| RMSNorm | isqrt32 + Q10 reciprocal | gain ≤16x | parameter-free |
+| Softmax | ROM LUT exp(-i/16) Q14 | 256 entries | T4 doctrine: no Taylor series |
+| Attention mixdown | num/(sum>>8) | — | ±0.4% vs exact, avoids int64 |
+| Sampling | greedy argmax 32..126 + '\n' | — | matches proven N64 path |
+
+Game title: **ELYA INTO DREAMS** (ROM header + title screen).

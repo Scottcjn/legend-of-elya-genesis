@@ -10,8 +10,8 @@ const ROMHeader rom_header = {
     "SEGA MEGA DRIVE ",
 #endif
     "(C)SGDK 2023    ",
-    "LEGEND OF ELYA                                  ",
-    "LEGEND OF ELYA                                  ",
+    "ELYA INTO DREAMS                                ",
+    "ELYA INTO DREAMS                                ",
     "GM 00000000-00",
     0x000,
     "JD              ",
@@ -28,6 +28,6 @@ const ROMHeader rom_header = {
     0x00200000,
     0x0020FFFF,
     "            ",
-    "LEGEND OF ELYA - ELYAN LABS             ",
+    "ELYA INTO DREAMS - ELYAN LABS           ",
     "JUE             "
 };
