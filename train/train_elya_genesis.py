@@ -158,9 +158,23 @@ def batch(bs=512):
     y = torch.stack([data_arr[i+1:i+CTX+1] for i in ix])
     return x.to(device), y.to(device)
 
-opt = torch.optim.AdamW(model.parameters(), lr=1.5e-3, weight_decay=0.01,
+# no weight decay on ternary weights: decay shrinks |W| under the
+# quantization threshold and destabilizes the per-tensor scale
+opt = torch.optim.AdamW(model.parameters(), lr=8e-4, weight_decay=0.0,
                         betas=(0.9, 0.95))
 sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=N_STEPS, eta_min=5e-5)
+
+# fixed held-out eval set: checkpoint on THIS, never on single-batch
+# training loss (which rewards one lucky batch, not a good model)
+torch.manual_seed(1234)
+ex, ey = batch(1024)
+
+@torch.no_grad()
+def eval_loss():
+    model.eval()
+    l = F.cross_entropy(model(ex).view(-1, VOCAB), ey.view(-1)).item()
+    model.train()
+    return l
 
 t0, best_loss, best_state = time.time(), 1e9, None
 for step in range(N_STEPS):
@@ -169,13 +183,15 @@ for step in range(N_STEPS):
     opt.zero_grad(); loss.backward()
     torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     opt.step(); sched.step()
-    lv = loss.item()
-    if lv < best_loss:
-        best_loss = lv
-        best_state = {k: v.clone() for k, v in model.state_dict().items()}
-    if step % 2500 == 0:
-        print(f"  {step:6d}/{N_STEPS}  loss={lv:.4f}  best={best_loss:.4f}  "
-              f"{time.time()-t0:.0f}s", flush=True)
+    if step % 250 == 0:
+        ev = eval_loss()
+        if ev < best_loss:
+            best_loss = ev
+            best_state = {k: v.clone() for k, v in model.state_dict().items()}
+        if step % 2500 == 0:
+            print(f"  {step:6d}/{N_STEPS}  train={loss.item():.4f}  "
+                  f"eval={ev:.4f}  best={best_loss:.4f}  "
+                  f"{time.time()-t0:.0f}s", flush=True)
 
 print(f"Done. best={best_loss:.4f}  {time.time()-t0:.0f}s")
 model.load_state_dict(best_state); model.eval()

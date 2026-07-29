@@ -320,9 +320,9 @@ static void elyanSplash(void)
 {
     VDP_drawText("S E G A", 16, 12);
     SND_startPlay_PCM(elyan_chant, sizeof(elyan_chant),
-                      SOUND_RATE_16000, SOUND_PAN_CENTER, FALSE);
-    /* choir runs ~1.83s = 110 frames */
-    for (u16 f = 0; f < 110; f++) SYS_doVBlankProcess();
+                      SOUND_RATE_22050, SOUND_PAN_CENTER, FALSE);
+    /* choir runs ~2.47s = 148 frames */
+    for (u16 f = 0; f < 148; f++) SYS_doVBlankProcess();
     VDP_clearTextArea(16, 12, 8, 1);
     VDP_drawText("E R R . . .", 14, 12);
     for (u16 f = 0; f < 60; f++) SYS_doVBlankProcess();
