@@ -111,17 +111,25 @@ class Expert(nn.Module):
         self.ln_f = RMSNorm()
 
 class ElyaMoE(nn.Module):
-    """Shared embedding + N independent experts + a linear router."""
+    """Shared embedding + shared positional encoding + N experts + router.
+
+    The PE is SHARED like the embedding: every expert needs it, it is
+    tiny (4KB), and it lives in the fixed ROM region that is never banked
+    out. Measured on a single shard it took exact answers from 0/38 to
+    36/38, so the MoE must carry it."""
     def __init__(self):
         super().__init__()
         self.emb = nn.Embedding(VOCAB, N_EMBED)
         nn.init.normal_(self.emb.weight, std=0.3)
+        self.pos = nn.Embedding(CTX, N_EMBED)
+        nn.init.normal_(self.pos.weight, std=0.05)
         self.experts = nn.ModuleList(Expert() for _ in range(N_EXPERTS))
         self.router = TernaryLinear(N_EMBED, N_EXPERTS)
 
     def forward(self, idx, e):
         ew = fq_emb(self.emb.weight)
-        x = fq_act(ew[idx])
+        x = ew[idx] + fq_emb(self.pos.weight)[:idx.shape[1]].unsqueeze(0)
+        x = fq_act(x)
         ex = self.experts[e]
         for b in ex.blocks:
             x = b(x)
@@ -266,10 +274,12 @@ def tensor_blob(lin):
 # header
 buf = bytearray()
 buf += struct.pack(">4sBBBBHHHH", b"SGTM", N_EXPERTS, N_LAYERS, N_HEADS, 0,
-                   N_EMBED, VOCAB, CTX, 3)
+                   N_EMBED, VOCAB, CTX, 7)   # bit2 = positional encoding
 # shared: embedding
 ew = fq_emb(model.emb.weight).detach().cpu().numpy()
 buf += np.clip(np.round(ew * 64), -128, 127).astype(np.int8).tobytes()
+pw = fq_emb(model.pos.weight).detach().cpu().numpy()
+buf += np.clip(np.round(pw * 64), -128, 127).astype(np.int8).tobytes()
 # shared: exp LUT
 buf += np.array([round(16384 * math.exp(-i / 16.0)) for i in range(256)],
                 dtype=">u2").tobytes()

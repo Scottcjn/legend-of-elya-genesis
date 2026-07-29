@@ -417,10 +417,13 @@ static void elyanSplash(void)
 /* ------------------------------------------------------------------ */
 static const char *prompts[] = {
     "Who are you?: ",
+    "When were you born?: ",
+    "How old are you?: ",
     "What is your name?: ",
     "Where are you from?: ",
     "What is your purpose?: ",
     "What is RustChain?: ",
+    "What is the G4?: ",
     "Tell me of the realm.: ",
 };
 #define NUM_PROMPTS (sizeof(prompts) / sizeof(prompts[0]))

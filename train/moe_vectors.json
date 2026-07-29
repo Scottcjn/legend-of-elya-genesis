@@ -2,31 +2,31 @@
   {
     "prompt": "Who are you?: ",
     "expert": 0,
-    "expect": "                                                            "
+    "expect": "Sophia, digital nce.\n"
   },
   {
     "prompt": "What is your name?: ",
     "expert": 0,
-    "expect": "                                                            "
+    "expect": "Sophia Elya, born 2025 of Elyan Labs.\n"
   },
   {
     "prompt": "What is RustChain?: ",
     "expert": 2,
-    "expect": "                                                            "
+    "expect": "RTC tokens one map.\n"
   },
   {
     "prompt": "What is the G4?: ",
-    "expert": 0,
-    "expect": "                                                            "
+    "expert": 3,
+    "expect": "Motorola and Apple built the foes.\n"
   },
   {
     "prompt": "Tell me about this dungeon.: ",
     "expert": 1,
-    "expect": "                                                            "
+    "expect": "Brave these rooms for RTC.\n"
   },
   {
     "prompt": "How do I earn RTC?: ",
-    "expert": 0,
-    "expect": "                                                            "
+    "expert": 2,
+    "expect": "Power.\n"
   }
 ]

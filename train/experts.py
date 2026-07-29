@@ -81,17 +81,32 @@ def shard():
         prompt = line.split(":")[0] + ":"
         router.append((prompt, e))
 
-    # background lore lines: give them to whichever expert they match,
-    # and to identity as a fallback so no expert is starved of prose
-    for line in bg:
-        e = classify(line)
-        shards[e if e is not None else 0].append(line)
+    # Background lore. Only give a line to an expert it actually matches;
+    # round-robin the rest. The old fallback sent EVERY unclassifiable
+    # line (219 of 303) to identity, making that shard 291 lines against
+    # 83-92 for the others - which inverted the whole premise for expert
+    # 0, giving it a harder job than the unsharded model had.
+    # Lore is OPT-IN. The 50-line shard that reached 95% exact answers
+    # trained on QA pairs ONLY (EG_SHARD mode zeroed CORPUS_LINES) - a
+    # fact that turned out to be load-bearing, not incidental. Adding
+    # ~140 lines of lore per expert pushed them out of that regime and
+    # cost most of the gain. Keep shards small; lore is available behind
+    # EG_SHARD_LORE=1 if fluency ever needs it.
+    import os as _os
+    if _os.environ.get("EG_SHARD_LORE") == "1":
+        rr = 0
+        for line in bg:
+            e = classify(line)
+            if e is None:
+                e = rr % N_EXPERTS
+                rr += 1
+            shards[e].append(line)
 
-    # unmatched QA goes to every expert: shared connective tissue rather
-    # than lost data (there are few of these and they are generic)
-    for line in unmatched:
-        for s in shards:
-            s.append(line)
+    # Generic QA (no topic match) is round-robined, NOT copied into every
+    # shard - duplicating 38 pairs four times was another 38 lines of
+    # bulk per expert for no topical benefit.
+    for i, line in enumerate(unmatched):
+        shards[i % N_EXPERTS].append(line)
 
     return shards, router, unmatched
 

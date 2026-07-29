@@ -340,6 +340,10 @@ int eg_init(EgState *st, const uint8_t *blob)
         const uint8_t *p = blob + 16;          /* after flags */
         st->emb = (const int8_t *)p;
         p += (uint32_t)EG_VOCAB * EG_EMBED;
+        if (rd16be(blob + 14) & 4) {           /* flags bit2: PE table */
+            st->pe = (const int8_t *)p;
+            p += (uint32_t)EG_CTX * EG_EMBED;
+        }
         st->explut = p;
         p += 512;
         p = eg_scan_tensor(&st->router, p, ne, (uint32_t)ne * EG_EMBED);

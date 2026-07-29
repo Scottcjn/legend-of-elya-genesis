@@ -23,6 +23,14 @@ int main(int argc, char **argv)
 
     int rc = eg_init(&st, blob);
     if (rc) { fprintf(stderr, "eg_init failed: %d\n", rc); return 1; }
+    /* Lock-On MoE: pick the expert for this prompt before generating.
+     * On a single-expert blob eg_route returns 0 and this is a no-op, so
+     * the same harness measures every system fairly. */
+    {
+        uint16_t e = eg_route(&st, argv[2]);
+        eg_select_expert(&st, e);
+        if (getenv("EG_SHOW_EXPERT")) fprintf(stderr, "expert=%u\n", e);
+    }
     eg_reset(&st);
 
     const char *prompt = argv[2];
