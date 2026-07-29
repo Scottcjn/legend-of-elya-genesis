@@ -158,3 +158,64 @@ converts an offset into (bank, in-bank address) when the mapper is used.
    the Genesis cannot do. See `legend-of-elya-n64/docs/STREAMING_MOE.md`.
 4. ROM size is not free on real hardware: a 4MB EverDrive load is fine; a
    32MB image needs mapper support confirmed on the actual device.
+
+---
+
+## RESULT: the capacity hypothesis is CONFIRMED (2026-07-29)
+
+The control the rigor audit demanded: one 114K ternary model, unchanged in
+every respect except that it trained on **one shard** (rustchain, 50
+lines) instead of the full 122-pair corpus. Scored against the corpus's
+own reference answers, best-match over all valid answers per question,
+same greedy decoding, same C engine, same six questions.
+
+| question | full-corpus | single-shard |
+|---|---|---|
+| What is RustChain? | 0 ch | **28 ch** |
+| What is RTC? | 3 ch | 2 ch |
+| How do I earn RTC? | 1 ch | **13 ch** |
+| What is a node? | 2 ch | **13 ch** |
+| What is epoch? | 0 ch | **28 ch** |
+| What is proof of antiquity? | 0 ch | 3 ch |
+| **mean exact prefix** | **1.0 ch** | **14.5 ch** |
+
+**14.5x**, and eval loss halved (0.9671 → 0.5001). Qualitatively:
+
+```
+full-corpus   "What is epoch?" -> "Man A Vecttati SIP?: MIPS MD MIPS MIPS ian"
+single-shard  "What is epoch?" -> "Epochs settle miner rewards minexpaintes."
+                        truth:    "Epochs settle miner rewards each ten minutes."
+```
+
+She now *starts every answer correctly*. Capacity was a real limit, the
+sharding premise holds, and the MoE is worth building properly.
+
+### But the failure has moved, and its new shape is informative
+
+Every answer is **correct then degrades**, typically after 13-28
+characters. That is not what a pure capacity ceiling looks like — a model
+short on parameters fails uniformly, not positionally.
+
+Correct-then-degrade with distance is the signature of **missing
+positional encoding**. This model has none (which is exactly what makes
+the KV ring buffer valid, see SPEED_PLAN.md §2). Early in an answer there
+is little context and the bag is unambiguous; as tokens accumulate the
+order-free bag of context gets muddier and the model loses its place in
+the sentence.
+
+The same absent feature has now surfaced three times independently — as
+the justification for the ring buffer, as the (retracted) explanation for
+Top-K, and now as the shape of this failure. It is the most likely single
+next win, and it is cheap to test.
+
+### Standing hypotheses, in priority order
+
+1. **Positional encoding** — predicted to fix the degradation tail. Also
+   makes real Top-K worth re-measuring. Costs a retrain, ~64x64 weights,
+   and invalidates the ring-buffer shortcut (attention stops being
+   order-invariant), which is a real trade to weigh.
+2. **Quinary weights** (`EG_LEVELS=2`, already implemented) — tests
+   whether a ternary QAT noise floor contributes. Orthogonal to 1.
+3. **MoE end-to-end** — now justified, but fix expert 0's 3.5x
+   oversized shard first or that expert reproduces the full-corpus
+   failure.

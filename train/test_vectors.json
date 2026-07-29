@@ -1,26 +1,26 @@
 [
   {
     "prompt": "Who are you?: ",
-    "expect": "I n neee hethe he he Goroose he bos the Ze Spsin Sthe Sthisi"
+    "expect": "The kinge mets computer f 1979.\n"
   },
   {
     "prompt": "What is your name?: ",
-    "expect": "Sophia Elya Elya Labs tionk?: sicofofof Ze Zelda Zelda, Han "
+    "expect": "About kst xpe ode bof wof e.\n"
   },
   {
     "prompt": "Where are you from?: ",
-    "expect": "Rof RTC RustChain n n n haivinthainte Enterke haintaintainta"
+    "expect": "Aquatichate Zope ma, beof 1979.\n"
   },
   {
     "prompt": "What is your purpose?: ",
-    "expect": "the the Flameheholder of of the of the the of of of the the "
+    "expect": "oof of antiqua's Old sild harnextres sthe sthe sewares.\n"
   },
   {
     "prompt": "What is RustChain?: ",
-    "expect": "N64 cs csomas cycs as as astltled as and thethe chasomete om"
+    "expect": "Elyan Labs blockchain for vil ge childwa chinte chinte mps.\n"
   },
   {
     "prompt": "Tell me of the realm.: ",
-    "expect": "Ze Handoldoldo, Flin Flililin ke ke ke kecin 202026.\n"
+    "expect": "the sasanodes.\n"
   }
 ]
