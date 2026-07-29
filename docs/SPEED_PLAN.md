@@ -97,13 +97,31 @@ byte-copy is roughly 40ms — per token.
 
 ## 3. Attention collapse — a split verdict
 
-### 3a. Lossless zero-prune: works, free
+### 3a. Lossless zero-prune: works, free — after a correction
 
 A position whose Q14 exp-LUT weight rounds to zero contributes *exactly*
-nothing to the V mixdown. Skipping it is correct by construction, verified
-byte-identical.
+nothing to the V mixdown, so skipping it is correct by construction.
 
-### 3b. Hard Top-K (PSE-style): FAILS on this model
+⚠️ **It was not actually lossless as first shipped.** The code cut at
+`d > 155` on the reasoning that `exp(-9.7)` rounds to 0 in Q14 — but the
+exported LUT stays nonzero (= 1) through index **166**, so 11 real
+weights were being silently discarded. Found by the Codex audit. The
+bound is now the LUT's own size and only `w == 0` is pruned. The lesson
+is small and general: *derive the prune bound from the table, never from
+the reasoning that produced the table.*
+
+### 3b. Hard Top-K: RESULT RETRACTED — the experiment was invalid
+
+⚠️ **The table below did not measure Top-K.** The selection loop ended
+with `if (++nsel >= EG_TOPK) break;`, which keeps the **first K survivors
+in ring-buffer scan order** — that is selection by *position*, not by
+*strength*. After the ring wraps, it is not even a stable subset. Every
+number in this table describes "keep the first K slots we happened to
+walk past", and the causal story built on top of it (bag-of-context, no
+winners to select between) was an explanation for a phenomenon that was
+never observed.
+
+Kept here because retracted results should stay visible:
 
 The POWER8 build runs Top-K:8 vec_perm collapse successfully. The same
 idea here degrades badly:
@@ -117,15 +135,15 @@ idea here degrades badly:
 | 48 | matches baseline |
 | 64 (off) | baseline |
 
-**Why**: with no positional encoding this is a *bag-of-context* model. Its
-signal is spread across the whole window rather than concentrated in a few
-sharp lookups, which is the opposite of the peaky attention that makes
-Top-K work in large LLMs. Constraint-bound selection needs something to
-select *between*; flat attention has no winners to keep.
-
-Kept behind `EG_TOPK`, default off. **Revisit only after adding positional
-encoding** — that change would likely make Top-K viable, and is the honest
-prerequisite.
+**Status**: real Top-K (insertion-sort selection of the K strongest
+survivors) is now implemented and **unmeasured**. The bag-of-context
+hypothesis is un-tested, not disproven — and the rigor audit had already
+flagged it as a story fitted after the fact, noting that "K=48 matches
+baseline" is inconsistent with genuinely flat attention. Before rerunning
+the sweep, measure the thing the claim is about: dump post-softmax
+attention weights and report entropy plus cumulative mass captured at
+K = 4/8/16/32/48. If top-8 captures under 25% of the mass, the story
+survives; if it captures over 70%, the failure was arithmetic.
 
 ## 4. Killing accidental software multiplies
 

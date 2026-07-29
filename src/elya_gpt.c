@@ -184,13 +184,37 @@ static void eg_layer(EgState *st, int16_t li, int16_t slot, int16_t n_ctx)
         int16_t nsel = 0;
         for (int16_t tt = 0; tt < n_ctx; tt++) {
             uint32_t d = (uint32_t)(mx - s_score[tt]) >> 12;  /* 1/16 units */
-            if (d > 155) continue;              /* exp(-9.7) -> 0 in Q14 */
+            /* Bound at the LUT's size, not at a hand-picked index. An
+             * earlier version cut at d>155 "because exp(-9.7) rounds to
+             * 0", but the exported LUT stays nonzero (=1) through index
+             * 166 — so that prune silently dropped 11 real weights and
+             * was NOT lossless as documented. Only w == 0 may be pruned. */
+            if (d > 255) continue;
             uint16_t w = rd16be(st->explut + (d << 1));
             if (w == 0) continue;
             s_selsc[nsel] = (int16_t)w;            /* Q14, <= 16384 */
             s_selix[nsel] = tt;
             sum += w;
-            if (++nsel >= EG_TOPK) break;
+            nsel++;
+        }
+
+        /* Optional LOSSY cap: keep the K STRONGEST survivors.
+         * The previous code simply broke out of the scan after K, which
+         * keeps the first K in ring order — position, not strength. Any
+         * "Top-K" measurement taken against that code did not test Top-K. */
+        if (EG_TOPK < EG_CTX && nsel > EG_TOPK) {
+            for (int16_t i = 1; i < nsel; i++) {       /* insertion sort desc */
+                int16_t ws = s_selsc[i], ix = s_selix[i], j = i - 1;
+                while (j >= 0 && s_selsc[j] < ws) {
+                    s_selsc[j + 1] = s_selsc[j];
+                    s_selix[j + 1] = s_selix[j];
+                    j--;
+                }
+                s_selsc[j + 1] = ws; s_selix[j + 1] = ix;
+            }
+            nsel = EG_TOPK;
+            sum = 0;
+            for (int16_t i = 0; i < nsel; i++) sum += s_selsc[i];
         }
         if (sum == 0) { s_selsc[0] = 1; s_selix[0] = 0; nsel = 1; sum = 1; }
         int32_t sum8 = sum >> 8;                   /* out = num/(sum>>8) */
@@ -271,16 +295,21 @@ uint16_t eg_route(EgState *st, const char *prompt)
     /* mean-pool the prompt's embeddings (int8 Q2.6 -> int16 Q3.12) */
     int16_t pooled[EG_EMBED];
     int32_t acc[EG_EMBED];
-    uint16_t n = 0;
+    int32_t n = 0;
     for (int16_t i = 0; i < EG_EMBED; i++) acc[i] = 0;
-    for (const char *c = prompt; *c; c++) {
+    for (const char *c = prompt; *c && n < EG_CTX; c++) {
         const int8_t *e = st->emb + (uint32_t)(uint8_t)*c * EG_EMBED;
         for (int16_t i = 0; i < EG_EMBED; i++) acc[i] += e[i];
         n++;
     }
     if (n == 0) return 0;
+    /* Scale BEFORE dividing. Dividing first threw away the fractional
+     * part of the mean, which is most of the router's signal — it
+     * changed 2 of 6 routing decisions versus the trained model. Also
+     * avoids a UB left-shift of a negative value. Prompt is capped at
+     * EG_CTX to match training. */
     for (int16_t i = 0; i < EG_EMBED; i++)
-        pooled[i] = sat16((acc[i] / (int16_t)n) << 6);
+        pooled[i] = sat16((acc[i] * 64) / n);
 
     int16_t logits[EG_MAX_EXPERTS];
     eg_matvec(&st->router, pooled, logits, EG_EMBED, (int16_t)st->n_experts);
@@ -400,7 +429,7 @@ uint8_t eg_next_token(EgState *st, uint8_t input)
     {
         const int8_t *e = st->emb + (uint32_t)input * EG_EMBED;
         for (int16_t i = 0; i < EG_EMBED; i++)
-            st->x[i] = (int16_t)((int16_t)e[i] << 6);
+            st->x[i] = (int16_t)(e[i] * 64);   /* Q2.6 -> Q3.12 */
     }
 
     /* 2. layers */
