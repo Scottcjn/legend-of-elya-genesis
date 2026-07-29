@@ -313,14 +313,23 @@ static void initDreamscape(void)
     SYS_setVIntCallback(dreamscapeVInt);
 }
 
-/* ELYAAAN — boot splash, Sophia's digitized voice through the DAC */
+/* Boot splash: Sophia belts the classic chant... then corrects herself.
+ * "SEEEGAAA" (choir) -> "Errr... Elyan Labs!" (deadpan), 8-bit PCM
+ * through the YM2612 DAC. Text flips in sync with the correction. */
 static void elyanSplash(void)
 {
-    VDP_drawText("E L Y A N", 15, 12);
+    VDP_drawText("S E G A", 16, 12);
     SND_startPlay_PCM(elyan_chant, sizeof(elyan_chant),
                       SOUND_RATE_16000, SOUND_PAN_CENTER, FALSE);
+    /* choir runs ~1.83s = 110 frames */
+    for (u16 f = 0; f < 110; f++) SYS_doVBlankProcess();
+    VDP_clearTextArea(16, 12, 8, 1);
+    VDP_drawText("E R R . . .", 14, 12);
+    for (u16 f = 0; f < 60; f++) SYS_doVBlankProcess();
+    VDP_clearTextArea(14, 12, 12, 1);
+    VDP_drawText("E L Y A N   L A B S", 10, 12);
     for (u16 f = 0; f < 150; f++) SYS_doVBlankProcess();
-    VDP_clearTextArea(15, 12, 10, 1);
+    VDP_clearTextArea(10, 12, 20, 1);
 }
 
 /* ------------------------------------------------------------------ */
