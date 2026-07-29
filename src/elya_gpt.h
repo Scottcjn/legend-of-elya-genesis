@@ -31,6 +31,19 @@
 #define EG_CTX    64
 #define EG_FFN    (EG_EMBED * 4)
 
+/* PSE-style attention collapse: only the K strongest context positions
+ * survive to the softmax + V mixdown. EG_TOPK == EG_CTX disables it. */
+#ifndef EG_TOPK
+#define EG_TOPK   EG_CTX
+#endif
+
+/* Weight layout: 1 = SGT2 index streams (fast, ~2.6x ROM),
+ *                0 = SGT1 2-bit packed (compact, slower).
+ * The blob's magic must match: SGT2 vs SGT1. */
+#ifndef EG_FORMAT_INDEX_STREAMS
+#define EG_FORMAT_INDEX_STREAMS 1
+#endif
+
 typedef struct {
     const uint8_t *packed;   /* 2-bit ternary weights, row-major [out][in] */
     uint16_t M;              /* requant multiplier (<=127)                  */

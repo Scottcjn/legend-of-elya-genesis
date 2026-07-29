@@ -1,2 +1,7 @@
 out/
 *.o
+train/*.log
+train/*.pt
+train/champions/*.pt
+train/portrait_preview.png
+train/STOP

@@ -27,6 +27,11 @@ N_LAYERS, N_EMBED, N_HEADS, VOCAB, CTX = 2, 64, 4, 256, 64
 HEAD_DIM = N_EMBED // N_HEADS
 FFN_DIM = N_EMBED * 4
 N_STEPS = int(sys.argv[1]) if len(sys.argv) > 1 else 25000
+# autotrain.py sweeps these; defaults match the v4 run
+import os as _os
+LR         = float(_os.environ.get("EG_LR", "5e-4"))
+PIN_W      = float(_os.environ.get("EG_PIN", "1e-2"))
+QA_REPEAT  = int(_os.environ.get("EG_QA_REPEAT", "1200"))
 
 HERE = Path(__file__).resolve().parent
 OUT_BIN = HERE.parent / "res" / "elya_genesis.bin"
@@ -47,12 +52,12 @@ for node in ast.walk(tree):
         lists[node.targets[0].id] = ast.literal_eval(node.value)
 QA_PAIRS, CORPUS_LINES = lists["QA_PAIRS"], lists["CORPUS_LINES"]
 
-qa_expanded, bg_expanded = [], []
-for _ in range(600):
+# v4: PURE QA corpus - the game only ever asks these; let the tiny
+# model memorize its script instead of diluting over lore lines
+qa_expanded = []
+for _ in range(QA_REPEAT):
     l = QA_PAIRS[:]; random.shuffle(l); qa_expanded.extend(l)
-for _ in range(300):
-    l = CORPUS_LINES[:]; random.shuffle(l); bg_expanded.extend(l)
-all_lines = qa_expanded + bg_expanded
+all_lines = qa_expanded
 random.shuffle(all_lines)
 data_bytes = ("\n".join(all_lines) + "\n").encode("ascii", errors="replace")
 print(f"Corpus: {len(data_bytes):,} bytes  QA={len(QA_PAIRS)}  BG={len(CORPUS_LINES)}")
@@ -160,7 +165,7 @@ def batch(bs=512):
 
 # no weight decay on ternary weights: decay shrinks |W| under the
 # quantization threshold and destabilizes the per-tensor scale
-opt = torch.optim.AdamW(model.parameters(), lr=8e-4, weight_decay=0.0,
+opt = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=0.0,
                         betas=(0.9, 0.95))
 sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=N_STEPS, eta_min=5e-5)
 
@@ -180,6 +185,8 @@ t0, best_loss, best_state = time.time(), 1e9, None
 for step in range(N_STEPS):
     x, y = batch()
     loss = F.cross_entropy(model(x).view(-1, VOCAB), y.view(-1))
+    emb_pin = F.relu(model.emb.weight.abs() - 1.8).pow(2).mean()
+    loss = loss + PIN_W * emb_pin
     opt.zero_grad(); loss.backward()
     torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     opt.step(); sched.step()
@@ -249,6 +256,25 @@ def pack_ternary(wq_np):
     b = (codes[0::4] << 6) | (codes[1::4] << 4) | (codes[2::4] << 2) | codes[3::4]
     return b.astype(np.uint8).tobytes()
 
+def pack_index_streams(wq_np):
+    """SGT2 'T2' layout: per output row, an explicit list of activation
+    indices to ADD and to SUBTRACT. The 68000 inner loop becomes
+    `MOVE.B (A1)+,D0 ; ADD.W (A2,D0.W),D2` — no bit unpacking, no branch
+    per weight, and zero weights cost literally nothing (they are simply
+    absent from both lists). Trades ROM (cheap on a cartridge) for cycles
+    (precious at 7.67 MHz). See docs/SPEED_PLAN.md.
+
+    Row layout: u16 n_add (BE), u16 n_sub (BE), n_add bytes, n_sub bytes.
+    in_dim <= 256 so every index fits a byte."""
+    out = bytearray()
+    for row in wq_np:
+        adds = np.nonzero(row > 0)[0].astype(np.uint8)
+        subs = np.nonzero(row < 0)[0].astype(np.uint8)
+        out += struct.pack(">HH", len(adds), len(subs))
+        out += adds.tobytes()
+        out += subs.tobytes()
+    return bytes(out)
+
 def requant(s):
     """out_q12 = (acc_q12 * M) >> S  ≈ acc_q12 * s, with M ≤ 127 (int32-safe)."""
     S = 0
@@ -258,8 +284,8 @@ def requant(s):
     return M, S
 
 buf = bytearray()
-buf += struct.pack(">4sBBHHHBB", b"SGT1", N_LAYERS, N_HEADS,
-                   N_EMBED, VOCAB, CTX, 1, 0)
+buf += struct.pack(">4sBBHHHBB", b"SGT2", N_LAYERS, N_HEADS,
+                   N_EMBED, VOCAB, CTX, 3, 0)   # flags: bit0 ternary, bit1 index-streams
 
 ew = fq_emb(model.emb.weight).detach().cpu().numpy()
 e8 = np.clip(np.round(ew * 64), -128, 127).astype(np.int8)
@@ -274,7 +300,7 @@ for li, blk in enumerate(model.blocks):
         wq_np = wq.detach().cpu().numpy()
         M, S = requant(float(s))
         buf += struct.pack(">HBB", M, S, 0)
-        buf += pack_ternary(wq_np)
+        buf += pack_index_streams(wq_np)
         nz = int((wq_np != 0).sum())
         print(f"  L{li}.{name}: s={float(s):.5f} M={M} S={S} "
               f"nonzero={100*nz/wq_np.size:.0f}%")
@@ -285,5 +311,5 @@ buf += lut.tobytes()
 
 OUT_BIN.parent.mkdir(exist_ok=True)
 OUT_BIN.write_bytes(buf)
-print(f"\nSGT1 blob: {len(buf):,} bytes -> {OUT_BIN}")
+print(f"\nSGT2 blob: {len(buf):,} bytes -> {OUT_BIN}")
 print("=== DONE ===")

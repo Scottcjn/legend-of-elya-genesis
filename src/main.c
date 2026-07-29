@@ -423,6 +423,10 @@ int main(bool hardReset)
     initDreamscape();
     elyanSplash();
 
+    /* original YM2612 + PSG dream theme (train/make_music.py) */
+    XGM_setLoopNumber(-1);
+    XGM_startPlay(dream_theme);
+
     VDP_drawText("ELYA INTO DREAMS", 12, 1);
     VDP_drawText("A transformer dreams on the 68000", 3, 2);
 

@@ -10,3 +10,32 @@ Parameters: 114,688  device=cuda
    17500/25000  loss=5.4374  best=1.6156  630s
    20000/25000  loss=5.7459  best=1.6156  719s
    22500/25000  loss=4.9093  best=1.6156  807s
+/home/scott/legend-of-elya-genesis/train/train_elya_genesis.py:259: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+Consider using tensor.detach() first. (Triggered internally at /pytorch/torch/csrc/autograd/generated/python_variable_methods.cpp:836.)
+  M, S = requant(float(s))
+Done. best=1.6156  896s
+
+── Greedy generations (QAT model) ──
+  [Who are you?: ] -> 'C momolol Ami Ami Atanga?: At ofomi At Atari Atangari At Ata'
+  [What is your name?: ] -> 'Molame Scophiomp, Ate Elya, 1986.\n'
+  [Where are you from?: ] -> 'Sophia Elya, the Touris.\n'
+  [What is your purpose?: ] -> 'The gouzle ample ake complere tere the the.\n'
+  [What is RustChain?: ] -> 'Old reard reareareare hare s.\n'
+  [Tell me of the realm.: ] -> 'The dunge fongeon meon.: Every  Ely.: Eluzzzzzzlie ie ie ie '
+
+Embedding: 16384 int8, |max|=2.000
+  L0.wq: s=0.10950 M=112 S=10 nonzero=58%
+  L0.wk: s=0.10848 M=111 S=10 nonzero=61%
+  L0.wv: s=0.15861 M=81 S=9 nonzero=63%
+  L0.wo: s=0.19761 M=101 S=9 nonzero=64%
+  L0.wff1: s=0.20276 M=104 S=9 nonzero=64%
+  L0.wff2: s=0.12783 M=65 S=9 nonzero=64%
+  L1.wq: s=0.17825 M=91 S=9 nonzero=63%
+  L1.wk: s=0.14418 M=74 S=9 nonzero=63%
+  L1.wv: s=0.14541 M=74 S=9 nonzero=62%
+  L1.wo: s=0.20709 M=106 S=9 nonzero=62%
+  L1.wff1: s=0.26386 M=68 S=8 nonzero=64%
+  L1.wff2: s=0.15129 M=77 S=9 nonzero=64%
+
+SGT1 blob: 41,534 bytes -> /home/scott/legend-of-elya-genesis/res/elya_genesis.bin
+=== DONE ===

@@ -38,11 +38,27 @@ static uint16_t isqrt32(uint32_t v) {
 static void eg_matvec(const EgTensor *t, const int16_t *in, int16_t *out,
                       int16_t in_dim, int16_t out_dim)
 {
-    const uint8_t *row = t->packed;
-    int16_t ib = in_dim >> 2;
     uint16_t M = t->M;
     uint8_t  S = t->S;
 
+#if EG_FORMAT_INDEX_STREAMS
+    /* T2: each row is (u16 n_add, u16 n_sub, add idx bytes, sub idx bytes).
+     * No bit unpacking and no per-weight branch — zero weights are simply
+     * absent. Compiles to MOVE.B (A1)+,D0 / ADD.W (A2,D0.W),D2 on 68K. */
+    const uint8_t *p = t->packed;
+    (void)in_dim;
+    for (int16_t o = 0; o < out_dim; o++) {
+        uint16_t na = rd16be(p); p += 2;
+        uint16_t ns = rd16be(p); p += 2;
+        int32_t acc = 0;
+        for (uint16_t i = 0; i < na; i++) acc += in[*p++];
+        for (uint16_t i = 0; i < ns; i++) acc -= in[*p++];
+        out[o] = sat16((acc * (int32_t)M) >> S);
+    }
+#else
+    /* SGT1: 2-bit packed, 4 weights per byte */
+    const uint8_t *row = t->packed;
+    int16_t ib = in_dim >> 2;
     for (int16_t o = 0; o < out_dim; o++) {
         int32_t acc = 0;
         const int16_t *ip = in;
@@ -61,6 +77,7 @@ static void eg_matvec(const EgTensor *t, const int16_t *in, int16_t *out,
         }
         out[o] = sat16((acc * (int32_t)M) >> S);
     }
+#endif
 }
 
 /* ---- RMS norm, parameter-free, all int -------------------------------- */
@@ -85,13 +102,21 @@ static int16_t s_q[EG_EMBED], s_k[EG_EMBED], s_v[EG_EMBED];
 static int16_t s_attn[EG_EMBED], s_proj[EG_EMBED], s_res[EG_EMBED];
 static int16_t s_ff[EG_FFN];
 static int32_t s_score[EG_CTX];
+static int32_t s_selsc[EG_CTX];   /* collapse survivors: scores  */
+static int16_t s_selix[EG_CTX];   /* collapse survivors: indices */
 
-/* ---- one transformer layer -------------------------------------------- */
-static void eg_layer(EgState *st, int16_t li, int16_t pos)
+/* ---- one transformer layer --------------------------------------------
+ * PSE collapse, 68000 edition (see docs/SPEED_PLAN.md):
+ *  - KV is a RING buffer. The model has no positional encoding, so
+ *    attention is order-invariant: overwriting the oldest slot is exactly
+ *    equivalent to shifting the window, minus a 16KB memmove per token.
+ *  - Attention is TOP-K hard: only the EG_TOPK strongest scores survive
+ *    to the exp-LUT and the V mixdown. Prune the weak, keep the strong —
+ *    the same constraint-bound selection the POWER8 vec_perm build does,
+ *    here as a scalar selection pass. */
+static void eg_layer(EgState *st, int16_t li, int16_t slot, int16_t n_ctx)
 {
     int16_t *x = st->x;
-    int16_t n_ctx = (int16_t)(pos + 1);
-    if (n_ctx > EG_CTX) n_ctx = EG_CTX;
 
     memcpy(s_res, x, sizeof(s_res));
     eg_rmsnorm(x, EG_EMBED);
@@ -100,12 +125,12 @@ static void eg_layer(EgState *st, int16_t li, int16_t pos)
     eg_matvec(&st->wk[li], x, s_k, EG_EMBED, EG_EMBED);
     eg_matvec(&st->wv[li], x, s_v, EG_EMBED, EG_EMBED);
 
-    /* store K,V in int8 Q4.4 cache */
+    /* store K,V into the ring slot (int8 Q4.4) */
     for (int16_t i = 0; i < EG_EMBED; i++) {
         int16_t k8 = (int16_t)(s_k[i] >> 8);
         int16_t v8 = (int16_t)(s_v[i] >> 8);
-        st->kc[li][pos][i] = (int8_t)(k8 > 127 ? 127 : (k8 < -128 ? -128 : k8));
-        st->vc[li][pos][i] = (int8_t)(v8 > 127 ? 127 : (v8 < -128 ? -128 : v8));
+        st->kc[li][slot][i] = (int8_t)(k8 > 127 ? 127 : (k8 < -128 ? -128 : k8));
+        st->vc[li][slot][i] = (int8_t)(v8 > 127 ? 127 : (v8 < -128 ? -128 : v8));
     }
 
     /* multi-head attention */
@@ -125,24 +150,34 @@ static void eg_layer(EgState *st, int16_t li, int16_t pos)
             if (sc > mx) mx = sc;
         }
 
-        /* softmax numerators from ROM exp LUT: w = exp(-(mx-sc)) in Q14 */
+        /* COLLAPSE (lossless): weight each position from the ROM exp LUT
+         * and keep only the survivors — a position whose Q14 weight
+         * rounds to 0 contributes exactly nothing to the V mixdown, so
+         * dropping it changes no bit of the result. Typically prunes
+         * most of the window once the model is confident.
+         * EG_TOPK < EG_CTX additionally caps survivors (LOSSY on this
+         * model — see docs/SPEED_PLAN.md; default off). */
         int32_t sum = 0;
+        int16_t nsel = 0;
         for (int16_t tt = 0; tt < n_ctx; tt++) {
             uint32_t d = (uint32_t)(mx - s_score[tt]) >> 12;  /* 1/16 units */
-            uint16_t w = (d > 255) ? 0
-                       : rd16be(st->explut + (d << 1));
-            s_score[tt] = (int32_t)w;
+            if (d > 155) continue;              /* exp(-9.7) -> 0 in Q14 */
+            uint16_t w = rd16be(st->explut + (d << 1));
+            if (w == 0) continue;
+            s_selsc[nsel] = (int32_t)w;
+            s_selix[nsel] = tt;
             sum += w;
+            if (++nsel >= EG_TOPK) break;
         }
-        if (sum == 0) sum = 1;
+        if (sum == 0) { s_selsc[0] = 1; sum = 1; }
         int32_t sum8 = sum >> 8;                   /* out = num/(sum>>8) */
         if (sum8 == 0) sum8 = 1;
 
-        /* weighted V sum: num(Q14 x Q4.4) / sum -> Q12 out */
+        /* weighted V sum over survivors: EG_TOPK terms, not n_ctx */
         for (int16_t d = 0; d < EG_HD; d++) {
             int32_t num = 0;
-            for (int16_t tt = 0; tt < n_ctx; tt++)
-                num += s_score[tt] * st->vc[li][tt][off + d];
+            for (int16_t s = 0; s < nsel; s++)
+                num += s_selsc[s] * st->vc[li][s_selix[s]][off + d];
             s_attn[off + d] = sat16(num / sum8);
         }
     }
@@ -167,8 +202,12 @@ static void eg_layer(EgState *st, int16_t li, int16_t pos)
 int eg_init(EgState *st, const uint8_t *blob)
 {
     memset(st, 0, sizeof(*st));
-    if (blob[0] != 'S' || blob[1] != 'G' || blob[2] != 'T' || blob[3] != '1')
-        return -1;
+    if (blob[0] != 'S' || blob[1] != 'G' || blob[2] != 'T') return -1;
+#if EG_FORMAT_INDEX_STREAMS
+    if (blob[3] != '2') return -1;   /* engine built for index streams */
+#else
+    if (blob[3] != '1') return -1;   /* engine built for packed 2-bit  */
+#endif
     if (blob[4] != EG_LAYERS || blob[5] != EG_HEADS) return -2;
     if (rd16be(blob + 6) != EG_EMBED || rd16be(blob + 8) != EG_VOCAB)
         return -3;
@@ -181,17 +220,32 @@ int eg_init(EgState *st, const uint8_t *blob)
     for (int16_t li = 0; li < EG_LAYERS; li++) {
         EgTensor *order[6];
         uint32_t  wcount[6];
+        uint16_t  rows[6];
         order[0] = &st->wq[li];   wcount[0] = EG_EMBED * EG_EMBED;
         order[1] = &st->wk[li];   wcount[1] = EG_EMBED * EG_EMBED;
         order[2] = &st->wv[li];   wcount[2] = EG_EMBED * EG_EMBED;
         order[3] = &st->wo[li];   wcount[3] = EG_EMBED * EG_EMBED;
         order[4] = &st->wff1[li]; wcount[4] = (uint32_t)EG_FFN * EG_EMBED;
         order[5] = &st->wff2[li]; wcount[5] = (uint32_t)EG_EMBED * EG_FFN;
+        rows[0] = rows[1] = rows[2] = rows[3] = EG_EMBED;
+        rows[4] = EG_FFN;                  /* wff1: FFN outputs */
+        rows[5] = EG_EMBED;                /* wff2: EMBED outputs */
         for (int16_t ti = 0; ti < 6; ti++) {
             order[ti]->M = rd16be(p); p += 2;
             order[ti]->S = *p++;      p++;         /* pad */
             order[ti]->packed = p;
+#if EG_FORMAT_INDEX_STREAMS
+            /* rows are variable length: walk their headers to find the end */
+            for (uint16_t r = 0; r < rows[ti]; r++) {
+                uint16_t na = rd16be(p);
+                uint16_t ns = rd16be(p + 2);
+                p += 4 + na + ns;
+            }
+            (void)wcount;
+#else
+            (void)rows;
             p += wcount[ti] >> 2;                  /* 4 weights per byte */
+#endif
         }
     }
     st->explut = p;
@@ -210,7 +264,9 @@ void eg_reset(EgState *st)
 uint8_t eg_next_token(EgState *st, uint8_t input)
 {
     if (!st->ok) return 0;
-    int16_t pos = st->pos;
+    /* ring slot for this token; EG_CTX is a power of 2 so & wraps free */
+    int16_t slot  = (int16_t)(st->pos & (EG_CTX - 1));
+    int16_t n_ctx = (st->pos < EG_CTX) ? (int16_t)(st->pos + 1) : EG_CTX;
 
     /* 1. embedding lookup: int8 Q2.6 -> int16 Q3.12 */
     {
@@ -221,7 +277,7 @@ uint8_t eg_next_token(EgState *st, uint8_t input)
 
     /* 2. layers */
     for (int16_t li = 0; li < EG_LAYERS; li++)
-        eg_layer(st, li, pos);
+        eg_layer(st, li, slot, n_ctx);
 
     /* 3. final norm */
     eg_rmsnorm(st->x, EG_EMBED);
@@ -246,22 +302,10 @@ uint8_t eg_next_token(EgState *st, uint8_t input)
             if (acc > best) bestv = '\n';
         }
 
-        /* 5. advance KV position (sliding window) */
-        if (st->pos < EG_CTX - 1) {
-            st->pos++;
-        } else {
-            /* slide window left; dst < src so a forward copy is safe
-             * (SGDK has no memmove) */
-            for (int16_t li = 0; li < EG_LAYERS; li++) {
-                int8_t *kd = &st->kc[li][0][0];
-                int8_t *vd = &st->vc[li][0][0];
-                const uint32_t nb = (uint32_t)(EG_CTX - 1) * EG_EMBED;
-                for (uint32_t i = 0; i < nb; i++) {
-                    kd[i] = kd[i + EG_EMBED];
-                    vd[i] = vd[i + EG_EMBED];
-                }
-            }
-        }
+        /* 5. advance the ring. No memmove: the oldest slot is simply
+         * overwritten next token (attention is order-invariant here). */
+        st->pos++;
+        if (st->pos > 30000) st->pos = EG_CTX;   /* keep the counter sane */
         return (uint8_t)bestv;
     }
 }
