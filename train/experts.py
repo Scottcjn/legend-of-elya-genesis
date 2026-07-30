@@ -21,6 +21,7 @@ EXPERTS = [
     # most hits wins, so specific topics precede general ones.
     ("origin", [
         "how old are you", "are you old", "are you vintage",
+        "remember being born", "older than this",
         "when were you born", "what year were you born",
         "when is your birthday", "your origin", "born in 19",
     ]),
@@ -28,10 +29,11 @@ EXPERTS = [
         "who are you", "your name", "where are you from", "your purpose",
         "flameholder", "are you wise", "what do you love", "a secret",
         "who made you", "are you alive", "do you dream", "your creator",
+        "do you fear", "are you happy", "can you say no", "you love",
         "victorian study",
     ]),
     ("zelda", [
-        "zelda", "link", "ganon", "navi", "saria", "malon",
+        "zelda", "link", "ganon", "navi", "saria", "malon", "impa",
         "epona", "triforce", "master sword", "hyrule", "kokiri",
         "death mountain", "lon lon", "goron", "zora", "ocarina",
         "temple", "medallion",
@@ -40,26 +42,30 @@ EXPERTS = [
         "dungeon", "proceed", "lurks", "need here", "help me",
         "encourage", "quest", "danger", "treasure", "monster",
         "boss", "realm", "where do i", "what should i",
+        "i am lost", "i am afraid", "should i go", "waits at the end",
     ]),
     ("rustchain", [
         "rustchain", "rtc", "earn", "node", "epoch",
         "antiquity", "mining", "miner", "token", "wallet", "attest",
-        "reward", "consensus",
+        "reward", "consensus", "cheat the chain", "much rtc",
     ]),
     ("retro", [
         "amiga", "c64", "commodore", "apple ii", "atari",
         "the nes", "snes", "ti-99", "trs-80", "zx spectrum",
-        "6502", "spectrum", "2600",
+        "6502", "spectrum", "2600", "retro machine", "vintage hardware",
     ]),
     ("hardware", [
         "g4", "g5", "power8", "altivec", "vec_perm",
         "big-endian", "endian", "vr4300", "rsp", "rdp",
         "console", "powerpc", "mips", "68000", "genesis",
         "runs this", "expansion pak", "n64", "render",
+        "z80", "vdp", "much ram", "chip slow", "this console",
     ]),
     ("meta", [
         "quantization", "q4", "your model", "language runs you",
         "how big", "parameters", "neural", "transformer",
+        "how do you think", "how fast do you think", "why ternary",
+        "your experts", "ternary",
     ]),
 ]
 N_EXPERTS = len(EXPERTS)
