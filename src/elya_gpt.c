@@ -51,13 +51,19 @@ static uint16_t isqrt32(uint32_t v) {
 /* ---- ternary matvec: out = requant(W * in) ----------------------------
  * in: int16 Q3.12   out: int16 Q3.12   acc: int32 (safe: 256*32767*127 < 2^31)
  * Inner loop is add/sub only — this is the reason the Genesis can think. */
+/* Layout is chosen at RUNTIME from the blob's flags bit1 so that one
+ * engine binary reads both index-stream and 2-bit-packed weights. That is
+ * what makes an honest 68000 A/B possible: two ROMs, same code, same
+ * weights, only the layout differs. */
+static uint8_t eg_streams = 1;
+
 static void eg_matvec(const EgTensor *t, const int16_t *in, int16_t *out,
                       int16_t in_dim, int16_t out_dim)
 {
     uint16_t M = t->M;
     uint8_t  S = t->S;
 
-#if EG_FORMAT_INDEX_STREAMS
+if (eg_streams) {
     /* T2: each row is (u16 n_add, u16 n_sub, add idx bytes, sub idx bytes).
      * No bit unpacking and no per-weight branch — zero weights are simply
      * absent. Compiles to MOVE.B (A1)+,D0 / ADD.W (A2,D0.W),D2 on 68K. */
@@ -71,8 +77,8 @@ static void eg_matvec(const EgTensor *t, const int16_t *in, int16_t *out,
         for (uint16_t i = 0; i < ns; i++) acc -= in[*p++];
         out[o] = sat16((acc * (int32_t)M) >> S);
     }
-#else
-    /* SGT1: 2-bit packed, 4 weights per byte */
+} else {
+    /* 2-bit packed, 4 weights per byte */
     const uint8_t *row = t->packed;
     int16_t ib = in_dim >> 2;
     for (int16_t o = 0; o < out_dim; o++) {
@@ -93,7 +99,7 @@ static void eg_matvec(const EgTensor *t, const int16_t *in, int16_t *out,
         }
         out[o] = sat16((acc * (int32_t)M) >> S);
     }
-#endif
+}
 }
 
 /* ---- RMS norm, parameter-free, all int -------------------------------- */
@@ -254,17 +260,15 @@ static const uint8_t *eg_scan_tensor(EgTensor *t, const uint8_t *p,
     t->M = rd16be(p); p += 2;
     t->S = *p++;      p++;                    /* pad */
     t->packed = p;
-#if EG_FORMAT_INDEX_STREAMS
-    for (uint16_t r = 0; r < rows; r++) {
-        uint16_t na = rd16be(p);
-        uint16_t ns = rd16be(p + 2);
-        p += 4 + na + ns;
+    if (eg_streams) {
+        for (uint16_t r = 0; r < rows; r++) {
+            uint16_t na = rd16be(p);
+            uint16_t ns = rd16be(p + 2);
+            p += 4 + na + ns;
+        }
+    } else {
+        p += wcount >> 2;
     }
-    (void)wcount;
-#else
-    (void)rows;
-    p += wcount >> 2;
-#endif
     return p;
 }
 
@@ -372,9 +376,8 @@ int eg_init(EgState *st, const uint8_t *blob)
 
     /* ---- SGTM: Lock-On MoE (shared embedding + N banked experts) ---- */
     if (blob[3] == 'M') {
-#if !EG_FORMAT_INDEX_STREAMS
-        return -1;                     /* MoE is index-stream only */
-#else
+        eg_streams = (rd16be(blob + 14) & 2) ? 1 : 0;
+        {
         uint16_t ne = blob[4];
         if (ne == 0 || ne > EG_MAX_EXPERTS) return -5;
         if (blob[5] != EG_LAYERS || blob[6] != EG_HEADS) return -2;
@@ -403,16 +406,12 @@ int eg_init(EgState *st, const uint8_t *blob)
         st->ok = 1;
         eg_select_expert(st, 0);
         return 0;
-#endif
+        }
     }
 
     /* ---- SGT1 / SGT2: single model, treated as one expert ---------- */
-#if EG_FORMAT_INDEX_STREAMS
-    /* '2' = index streams, '3' = index streams + positional encoding */
-    if (blob[3] != '2' && blob[3] != '3') return -1;
-#else
-    if (blob[3] != '1') return -1;   /* engine built for packed 2-bit  */
-#endif
+    if (blob[3] != '1' && blob[3] != '2' && blob[3] != '3') return -1;
+    eg_streams = (blob[12] & 2) ? 1 : 0;
     if (blob[4] != EG_LAYERS || blob[5] != EG_HEADS) return -2;
     if (rd16be(blob + 6) != EG_EMBED || rd16be(blob + 8) != EG_VOCAB)
         return -3;

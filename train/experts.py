@@ -15,54 +15,51 @@ from pathlib import Path
 
 
 EXPERTS = [
-    # 8 narrow topics instead of 4 broad ones. The previous map left 41 of
-    # 85 questions unmatched and round-robined them arbitrarily, so every
-    # expert carried a random third of the Zelda lore and the retro-computer
-    # catalogue on top of its own subject. Those "generic" questions were
-    # never generic - they were four whole topics nobody had named.
-    # Order matters: the FIRST expert with the most keyword hits wins, so
-    # specific topics are listed before the general ones they resemble.
-    ("origin", [                       # her own age/birth - was leaking 1983
-        r"how old are you", r"are you old", r"are you vintage",
-        r"when were you born", r"what year were you born",
-        r"when is your birthday", r"your origin", r"born in 19",
+    # 8 narrow topics. Plain lowercase SUBSTRINGS, no regex: this is the
+    # same matching the ROM router performs, so training labels and
+    # runtime routing cannot disagree. Order matters - the expert with the
+    # most hits wins, so specific topics precede general ones.
+    ("origin", [
+        "how old are you", "are you old", "are you vintage",
+        "when were you born", "what year were you born",
+        "when is your birthday", "your origin", "born in 19",
     ]),
     ("identity", [
-        r"who are you", r"your name", r"where are you from", r"your purpose",
-        r"flameholder", r"are you wise", r"what do you love", r"a secret",
-        r"who made you", r"are you alive", r"do you dream", r"your creator",
-        r"victorian study",
+        "who are you", "your name", "where are you from", "your purpose",
+        "flameholder", "are you wise", "what do you love", "a secret",
+        "who made you", "are you alive", "do you dream", "your creator",
+        "victorian study",
     ]),
-    ("zelda", [                        # the single biggest unrouted cluster
-        r"zelda", r"link", r"ganon", r"navi", r"saria", r"malon",
-        r"epona", r"triforce", r"master sword", r"hyrule", r"kokiri",
-        r"death mountain", r"lon lon", r"goron", r"zora", r"ocarina",
-        r"temple", r"medallion", r"ocarina",
+    ("zelda", [
+        "zelda", "link", "ganon", "navi", "saria", "malon",
+        "epona", "triforce", "master sword", "hyrule", "kokiri",
+        "death mountain", "lon lon", "goron", "zora", "ocarina",
+        "temple", "medallion",
     ]),
     ("quest", [
-        r"dungeon", r"proceed", r"lurks", r"need here", r"help me",
-        r"encourage", r"quest", r"danger", r"treasure", r"path",
-        r"monster", r"boss", r"realm", r"where do i", r"what should i",
+        "dungeon", "proceed", "lurks", "need here", "help me",
+        "encourage", "quest", "danger", "treasure", "monster",
+        "boss", "realm", "where do i", "what should i",
     ]),
     ("rustchain", [
-        r"rustchain", r"rtc", r"earn", r"node", r"epoch",
-        r"antiquity", r"mining", r"miner", r"token", r"wallet", r"attest",
-        r"reward", r"consensus",
+        "rustchain", "rtc", "earn", "node", "epoch",
+        "antiquity", "mining", "miner", "token", "wallet", "attest",
+        "reward", "consensus",
     ]),
-    ("retro", [                        # the home-computer catalogue
-        r"amiga", r"c64", r"commodore", r"apple ii", r"atari",
-        r"nes", r"snes", r"ti-99", r"trs-80", r"zx spectrum",
-        r"6502", r"spectrum", r"2600",
+    ("retro", [
+        "amiga", "c64", "commodore", "apple ii", "atari",
+        "the nes", "snes", "ti-99", "trs-80", "zx spectrum",
+        "6502", "spectrum", "2600",
     ]),
-    ("hardware", [                     # the silicon SHE runs on
-        r"g4", r"g5", r"power8", r"altivec", r"vec_perm",
-        r"big-endian", r"endian", r"vr4300", r"rsp", r"rdp",
-        r"console", r"powerpc", r"mips", r"68000", r"genesis",
-        r"runs this", r"expansion pak", r"n64", r"render",
+    ("hardware", [
+        "g4", "g5", "power8", "altivec", "vec_perm",
+        "big-endian", "endian", "vr4300", "rsp", "rdp",
+        "console", "powerpc", "mips", "68000", "genesis",
+        "runs this", "expansion pak", "n64", "render",
     ]),
-    ("meta", [                         # questions about the model itself
-        r"quantization", r"q4", r"your model", r"language runs you",
-        r"how big", r"parameters", r"neural", r"transformer",
+    ("meta", [
+        "quantization", "q4", "your model", "language runs you",
+        "how big", "parameters", "neural", "transformer",
     ]),
 ]
 N_EXPERTS = len(EXPERTS)
