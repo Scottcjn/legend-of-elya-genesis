@@ -1,32 +1,32 @@
 [
   {
     "prompt": "Who are you?: ",
-    "expert": 0,
-    "expect": "Barely a year old, running on ancient chips.\n"
+    "expert": 1,
+    "expect": "I am Sophia Elya, the helpmeet.\n"
   },
   {
     "prompt": "What is your name?: ",
     "expert": 0,
-    "expect": "External nodes expand the chain worldwide.\n"
+    "expect": "No. This machine predates me by decades.\n"
   },
   {
     "prompt": "What is RustChain?: ",
     "expert": 1,
-    "expect": "do Fll me Scott, founder of Elyan Labs.\n"
+    "expect": "the Victorian Study.\n"
   },
   {
     "prompt": "What is the G4?: ",
     "expert": 2,
-    "expect": "Epon h hat Eponat he his Epona?: Epona is Link's loyal horse"
+    "expect": "Epona is Link's loyal horse companion.\n"
   },
   {
     "prompt": "Tell me about this dungeon.: ",
-    "expert": 3,
-    "expect": "Every key unlocks deeeper truth.\n"
+    "expert": 0,
+    "expect": "March h this console?: The Genesis is from 1989. I am from 2"
   },
   {
     "prompt": "How do I earn RTC?: ",
     "expert": 0,
-    "expect": "silicon the NES. I am from 2025.\n"
+    "expect": "    ye four born iverthan of March, 2025.\n"
   }
 ]
