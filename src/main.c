@@ -26,112 +26,69 @@
 #define CI_BLUSH   7
 
 /* ------------------------------------------------------------------ */
-/* Elya face: 32x32 px = 4x4 tiles, procedural (art pass comes later) */
+/* Elya's portrait: the real 64x96 bust converted from the canonical    */
+/* reference (train/make_portrait.py), replacing the procedural face.   */
+/*                                                                      */
+/* Only the MOUTH changes while she speaks, so the two viseme variants  */
+/* are uploaded once at init and selected by rewriting 2 tilemap        */
+/* entries — 4 bytes per token instead of re-packing and re-DMAing the  */
+/* whole 3 KB face. That difference is why she can talk at all without  */
+/* stealing DMA from the Dreamscape.                                    */
 /* ------------------------------------------------------------------ */
 #define FACE_TILE_INDEX  TILE_USER_INDEX
-#define FACE_W  32
-#define FACE_H  32
-#define FACE_TILES ((FACE_W / 8) * (FACE_H / 8))
+#define FACE_TW  8                       /* 64 px wide  */
+#define FACE_TH  12                      /* 96 px tall  */
+#define FACE_TILES (FACE_TW * FACE_TH)
+#define MOUTH_TW 2                       /* 16x8 px viseme strip */
+#define MOUTH_TH 1
+#define MOUTH_TILES (MOUTH_TW * MOUTH_TH)
+#define MOUTH_OPEN_INDEX (FACE_TILE_INDEX + FACE_TILES)
+#define MOUTH_WIDE_INDEX (MOUTH_OPEN_INDEX + MOUTH_TILES)
+/* where the mouth sits inside the portrait (see make_portrait.py MX/MY) */
+#define MOUTH_TX 3
+#define MOUTH_TY 7
 
-static u8  facePix[FACE_H][FACE_W];
-static u32 faceTiles[FACE_TILES * 8];
+static u16 facePX, facePY;               /* portrait origin, tile coords */
 
 enum { MOUTH_CLOSED = 0, MOUTH_OPEN = 1, MOUTH_WIDE = 2 };
 static u16 mouthState = MOUTH_CLOSED;
 
-static void drawFacePixels(u16 mouth)
+static void placeFaceTilemap(u16 px, u16 py)
 {
-    memset(facePix, CI_BG, sizeof(facePix));
-
-    for (s16 y = 2; y < 32; y++) {
-        for (s16 x = 2; x < 30; x++) {
-            if (x < 7 || x > 24) {
-                if (y > 4) facePix[y][x] = (x < 4 || x > 27) ? CI_HAIR_D : CI_HAIR;
-                continue;
-            }
-            if (y < 9) facePix[y][x] = (y < 4) ? CI_HAIR_D : CI_HAIR;
-        }
-    }
-    for (s16 y = 8; y < 28; y++) {
-        for (s16 x = 7; x < 25; x++) {
-            s16 dx = x - 15, dy = y - 17;
-            if (dx < 0) dx = -dx;
-            if (dy < 0) dy = -dy;
-            if (dx + dy < 17) facePix[y][x] = CI_SKIN;
-        }
-    }
-    for (s16 x = 7; x < 25; x++) {
-        facePix[8][x] = CI_HAIR;
-        if ((x & 3) != 1) facePix[9][x] = CI_HAIR;
-        if ((x & 3) == 2) facePix[10][x] = CI_HAIR;
-    }
-    for (s16 x = 10; x < 13; x++) { facePix[14][x] = CI_EYE; facePix[15][x] = CI_EYE; }
-    for (s16 x = 19; x < 22; x++) { facePix[14][x] = CI_EYE; facePix[15][x] = CI_EYE; }
-    facePix[13][10] = CI_OUTLINE; facePix[13][11] = CI_OUTLINE; facePix[13][12] = CI_OUTLINE;
-    facePix[13][19] = CI_OUTLINE; facePix[13][20] = CI_OUTLINE; facePix[13][21] = CI_OUTLINE;
-    facePix[18][9]  = CI_BLUSH; facePix[18][10] = CI_BLUSH;
-    facePix[18][21] = CI_BLUSH; facePix[18][22] = CI_BLUSH;
-    facePix[18][15] = CI_OUTLINE; facePix[19][15] = CI_OUTLINE;
-
-    switch (mouth) {
-        case MOUTH_CLOSED:
-            for (s16 x = 13; x < 19; x++) facePix[23][x] = CI_MOUTH;
-            break;
-        case MOUTH_OPEN:
-            for (s16 x = 13; x < 19; x++) {
-                facePix[22][x] = CI_MOUTH;
-                facePix[23][x] = CI_MOUTH;
-            }
-            facePix[22][13] = CI_OUTLINE; facePix[22][18] = CI_OUTLINE;
-            break;
-        case MOUTH_WIDE:
-            for (s16 x = 12; x < 20; x++) {
-                facePix[22][x] = CI_MOUTH;
-                facePix[23][x] = CI_MOUTH;
-                facePix[24][x] = CI_MOUTH;
-            }
-            facePix[22][12] = CI_OUTLINE; facePix[22][19] = CI_OUTLINE;
-            facePix[24][12] = CI_OUTLINE; facePix[24][19] = CI_OUTLINE;
-            break;
-    }
+    facePX = px; facePY = py;
+    SYS_disableInts();
+    VDP_setTileMapEx(BG_A, elya_face.tilemap,
+                     TILE_ATTR_FULL(PAL1, TRUE, FALSE, FALSE, FACE_TILE_INDEX),
+                     px, py, 0, 0, FACE_TW, FACE_TH, DMA);
+    SYS_enableInts();
 }
 
 static void uploadFace(void)
 {
-    u16 t = 0;
-    for (u16 ty = 0; ty < FACE_H / 8; ty++) {
-        for (u16 tx = 0; tx < FACE_W / 8; tx++) {
-            for (u16 row = 0; row < 8; row++) {
-                u32 packed = 0;
-                for (u16 col = 0; col < 8; col++)
-                    packed = (packed << 4) | (facePix[ty * 8 + row][tx * 8 + col] & 0xF);
-                faceTiles[t * 8 + row] = packed;
-            }
-            t++;
-        }
-    }
     SYS_disableInts();
-    VDP_loadTileData(faceTiles, FACE_TILE_INDEX, FACE_TILES, DMA_QUEUE);
+    VDP_loadTileSet(elya_face.tileset, FACE_TILE_INDEX, DMA);
+    VDP_loadTileSet(mouth_open.tileset, MOUTH_OPEN_INDEX, DMA);
+    VDP_loadTileSet(mouth_wide.tileset, MOUTH_WIDE_INDEX, DMA);
+    PAL_setPalette(PAL1, elya_face.palette->data, DMA);
     SYS_enableInts();
 }
 
-static void placeFaceTilemap(u16 px, u16 py)
-{
-    u16 t = 0;
-    for (u16 ty = 0; ty < FACE_H / 8; ty++)
-        for (u16 tx = 0; tx < FACE_W / 8; tx++)
-            VDP_setTileMapXY(BG_A,
-                TILE_ATTR_FULL(PAL1, TRUE, FALSE, FALSE, FACE_TILE_INDEX + t++),
-                px + tx, py + ty);
-}
-
+/* 4 bytes of tilemap per token — no tile upload, no DMA queue */
 static void setMouth(u16 m)
 {
-    if (m != mouthState) {
-        mouthState = m;
-        drawFacePixels(m);
-        uploadFace();
+    if (m == mouthState) return;
+    mouthState = m;
+    SYS_disableInts();
+    for (u16 i = 0; i < MOUTH_TW; i++) {
+        u16 t;
+        if (m == MOUTH_OPEN)      t = MOUTH_OPEN_INDEX + i;
+        else if (m == MOUTH_WIDE) t = MOUTH_WIDE_INDEX + i;
+        else t = FACE_TILE_INDEX + (MOUTH_TY * FACE_TW) + MOUTH_TX + i;
+        VDP_setTileMapXY(BG_A,
+            TILE_ATTR_FULL(PAL1, TRUE, FALSE, FALSE, t),
+            facePX + MOUTH_TX + i, facePY + MOUTH_TY);
     }
+    SYS_enableInts();
 }
 
 /* ------------------------------------------------------------------ */
@@ -141,7 +98,12 @@ static void setMouth(u16 m)
 /* from the VBlank interrupt so the dream keeps moving even while the */
 /* 68000 is deep inside a forward pass (T7 doctrine).                 */
 /* ------------------------------------------------------------------ */
-#define DS_TILE_INDEX  (FACE_TILE_INDEX + FACE_TILES)
+/* VRAM is allocated as a CHAIN — each block starts where the previous one
+ * ends. Defining this as FACE_TILE_INDEX + FACE_TILES made it collide with
+ * the mouth visemes, which live in the same gap, and the Dreamscape
+ * overwrote her lips (visible as green blocks over the whole screen).
+ * Every block below must chain off the one above it, never off the base. */
+#define DS_TILE_INDEX  (MOUTH_WIDE_INDEX + MOUTH_TILES)
 /* tile roles (offset from DS_TILE_INDEX) */
 #define DT_STAR1   0
 #define DT_STAR2   1
@@ -274,63 +236,6 @@ static void buildDreamMap(void)
                 x, FLOOR_ROW + r);
         }
     }
-}
-
-/* ------------------------------------------------------------------ */
-/* TOKEN RAIN — her thoughts falling through the dream.                */
-/* Columns of glyphs drift down BG_B at per-column speeds via          */
-/* VSCROLL_COLUMN (20 two-cell entries in H40). The tilemap is filled  */
-/* once and never rewritten; ALL motion is VSRAM writes, so it costs   */
-/* no VRAM and no DMA. When Elya emits a token, that ACTUAL character  */
-/* is written into the top of a column: the background is made of her  */
-/* own output, raining down behind her.                                */
-/* ------------------------------------------------------------------ */
-#define RAIN_COLS 16                 /* power of 2: no division anywhere */
-static s16 rainPos[RAIN_COLS];       /* Q12.4 accumulators */
-static s16 rainVS[RAIN_COLS];
-static const s16 rainSpd[RAIN_COLS] = { 3,7,2,5,11,4,9,6,13,3,8,2,10,5,7,4 };
-static u16 rainCol = 0;
-
-static void rainInit(void)
-{
-    /* BG_A carries her face, the dialog and the text — it must NOT move.
-     * VSCROLL_COLUMN is global to both planes, so zero A's entries once. */
-    static s16 zeroVS[20];
-    memset(zeroVS, 0, sizeof(zeroVS));
-    VDP_setVerticalScrollTile(BG_A, 0, zeroVS, 20, CPU);
-
-    /* seed the columns with faint glyphs so the rain exists before she
-     * has said anything (PAL0 = the dim text palette) */
-    for (u16 c = 0; c < RAIN_COLS; c++) {
-        for (u16 row = 0; row < 28; row++) {
-            u16 h = (u16)(c * 37 + row * 17);
-            if ((h & 7) != 0) continue;
-            u16 t = TILE_FONT_INDEX + (h % 60);
-            VDP_setTileMapXY(BG_B, TILE_ATTR_FULL(PAL0, FALSE, FALSE, FALSE, t),
-                             c * 2, row);
-        }
-    }
-}
-
-/* called once per generated token — the dream rains what she just said.
- *
- * SGDK's VDP helpers are NOT reentrant: each sets a VDP address and then
- * writes data. If the VBlank callback fires between those two steps it
- * retargets the VDP, and this write lands somewhere arbitrary — VRAM
- * corruption or a lockup. Every main-loop VDP access in this file is
- * therefore guarded. (Learned the hard way: the ROM crashed.) */
-static void rainDropToken(u8 tok)
-{
-    if (tok < 32 || tok > 126) return;
-    u16 row = (u16)((0 - (rainPos[rainCol] >> 7)) - 1) & 31;
-    u16 t = TILE_FONT_INDEX + (tok - 32);
-    SYS_disableInts();
-    VDP_setTileMapXY(BG_B, TILE_ATTR_FULL(PAL1, FALSE, FALSE, FALSE, t),
-                     rainCol * 2, row);
-    VDP_setTileMapXY(BG_B, TILE_ATTR_FULL(PAL1, FALSE, FALSE, FALSE, t),
-                     rainCol * 2 + 1, row);
-    SYS_enableInts();
-    rainCol = (rainCol + 7) & (RAIN_COLS - 1);   /* stride 7, never adjacent */
 }
 
 /* runs every vblank — the dream animates even while Elya thinks */
@@ -939,6 +844,93 @@ static void runBenchmark(void)
 }
 #endif
 
+
+/* ================================================================== */
+/* INTRO PLAYER — the Elyan logo animation, streamed from ROM.        */
+/*                                                                    */
+/* Format EIV2 (train/make_intro.py): a global palette, then per frame */
+/* a list of changed tiles and changed tilemap cells. Only the DELTA   */
+/* is stored, so a 10s clip is 404 KB instead of megabytes.            */
+/*                                                                    */
+/* Budget: peak 4,928 bytes of tile data per frame against the 7,200   */
+/* byte VBlank DMA capacity, so a whole frame lands in one VBlank and  */
+/* nothing tears. That is why the window is 128x96 and not fullscreen: */
+/* a full 320x224 frame would be 35 KB, five VBlanks for one image.    */
+/* ================================================================== */
+#define IV_TILE_INDEX  TILE_USER_INDEX      /* reused; intro runs first */
+#define IV_MAX_TILES   200
+
+static u16 iv_rd16(const u8 **p)
+{
+    u16 v = (u16)(((*p)[0] << 8) | (*p)[1]);
+    *p += 2;
+    return v;
+}
+
+static void playIntro(void)
+{
+    const u8 *p = (const u8 *)intro_data;
+    if (p[0] != 'E' || p[1] != 'I' || p[2] != 'V' || p[3] != '2') return;
+    p += 4;
+    u16 tw = iv_rd16(&p), th = iv_rd16(&p);
+    u16 nfr = iv_rd16(&p), fps = iv_rd16(&p);
+    p += 4;                                  /* peak tiles, unused here */
+
+    /* one global palette for the whole clip */
+    u16 pal[16];
+    for (u16 i = 0; i < 16; i++) pal[i] = iv_rd16(&p);
+    PAL_setPalette(PAL3, pal, DMA);
+
+    VDP_setScrollingMode(HSCROLL_PLANE, VSCROLL_PLANE);
+    VDP_clearPlane(BG_A, TRUE);
+    VDP_clearPlane(BG_B, TRUE);
+    PAL_setColor(0, pal[0]);
+
+    u16 ox = (40 - tw) >> 1, oy = (28 - th) >> 1;
+    u16 wait = (fps >= 60) ? 1 : (u16)(60 / fps);
+
+    for (u16 f = 0; f < nfr; f++) {
+        /* changed tiles -> VRAM. Uploaded one at a time: they are not
+         * contiguous, and a per-tile DMA still costs far less than the
+         * VBlank budget at this frame size. */
+        u16 n_t = iv_rd16(&p);
+        SYS_disableInts();
+        for (u16 i = 0; i < n_t; i++) {
+            u16 slot = iv_rd16(&p);
+            VDP_loadTileData((const u32 *)p, IV_TILE_INDEX + slot, 1, CPU);
+            p += 32;
+        }
+        /* changed tilemap cells */
+        u16 n_m = iv_rd16(&p);
+        for (u16 i = 0; i < n_m; i++) {
+            u16 cell = iv_rd16(&p);
+            u16 slot = iv_rd16(&p);
+            VDP_setTileMapXY(BG_A,
+                TILE_ATTR_FULL(PAL3, TRUE, FALSE, FALSE, IV_TILE_INDEX + slot),
+                ox + (cell % tw), oy + (cell / tw));
+        }
+        SYS_enableInts();
+
+        /* VDP_waitVSync polls the VDP status register directly. Using
+         * SYS_doVBlankProcess here is wrong: it depends on the VInt
+         * machinery the main loop sets up LATER, so before that exists it
+         * can return immediately and the whole 10-second intro flashes
+         * past in a fraction of a second. */
+        for (u16 w = 0; w < wait; w++) VDP_waitVSync();
+
+        /* START skips the intro — but NOT in the first frames. The joypad
+         * port reads all-ones before it has been polled, so checking it
+         * immediately makes every button look pressed and the intro skips
+         * itself instantly. Give it a few frames to settle. */
+        if (f > 6 && (JOY_readJoypad(JOY_1) & BUTTON_START)) break;
+    }
+
+    SYS_disableInts();
+    VDP_clearPlane(BG_A, TRUE);
+    VDP_clearPlane(BG_B, TRUE);
+    SYS_enableInts();
+}
+
 int main(bool hardReset)
 {
     (void)hardReset;
@@ -946,14 +938,7 @@ int main(bool hardReset)
     VDP_setScreenWidth320();
     VDP_setTextPalette(PAL0);
 
-    PAL_setColor(16 + CI_SKIN,    RGB24_TO_VDPCOLOR(0xF0C8A0));
-    PAL_setColor(16 + CI_HAIR,    RGB24_TO_VDPCOLOR(0xA04020));
-    PAL_setColor(16 + CI_HAIR_D,  RGB24_TO_VDPCOLOR(0x702010));
-    PAL_setColor(16 + CI_EYE,     RGB24_TO_VDPCOLOR(0x30A050));
-    PAL_setColor(16 + CI_MOUTH,   RGB24_TO_VDPCOLOR(0x902030));
-    PAL_setColor(16 + CI_OUTLINE, RGB24_TO_VDPCOLOR(0x402020));
-    PAL_setColor(16 + CI_BLUSH,   RGB24_TO_VDPCOLOR(0xE09080));
-
+    playIntro();          /* Elyan logo animation, then the boot gag */
     initDreamscape();
     elyanSplash();
 
@@ -975,9 +960,8 @@ int main(bool hardReset)
         VDP_drawText("WEIGHTS MISSING - STUB ROM", 7, 26);
     }
 
-    drawFacePixels(MOUTH_CLOSED);
     uploadFace();
-    placeFaceTilemap(4, 6);
+    placeFaceTilemap(2, 5);
 
     /* black terminal window for her speech */
     panelWindow(DIALOG_X - 1, DIALOG_Y - 1, DIALOG_W + 2, DIALOG_H + 2,
