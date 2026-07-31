@@ -52,26 +52,52 @@ def vdp_color(r, g, b):
 def extract(path, w, h, fps, tmp):
     """ffmpeg -> PNG frames at the target size, letterboxed not stretched."""
     out = Path(tmp) / "f%05d.png"
+    # TEMPORAL DENOISE FIRST. Delta-frame encoding only pays off when
+    # unchanged areas are byte-identical, and camera grain in filmed
+    # footage makes every tile differ slightly every frame - on the first
+    # run of this converter dedup+delta actually made the file 3% LARGER.
+    # hqdn3d's temporal terms flatten that noise so static regions really
+    # are static. Scale down BEFORE denoising so the filter works on the
+    # pixels we will actually keep.
     vf = (f"fps={fps},scale={w}:{h}:force_original_aspect_ratio=decrease,"
-          f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black")
+          f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black,"
+          f"hqdn3d=4:3:12:9")
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(path),
                     "-vf", vf, str(out)], check=True)
     return sorted(Path(tmp).glob("f*.png"))
 
-def quantize(img):
-    """15 colours + black, snapped to the Genesis 8-level-per-channel grid."""
-    q = img.convert("RGB").quantize(colors=15, method=Image.MEDIANCUT,
-                                    dither=Image.FLOYDSTEINBERG)
-    pal = q.getpalette()[:15 * 3]
-    # index 0 is reserved transparent/black, so shift real colours to 1..15
-    idx = np.asarray(q, dtype=np.uint8) + 1
+def build_palette(frames, n=15):
+    """One palette for the whole clip, from a sample of frames.
+
+    A PER-FRAME palette looked like the obvious win (16 CRAM words is
+    nearly free) but it is actively harmful for compression: identical
+    visual content lands on DIFFERENT indices each frame, so no tile ever
+    matches the previous frame and delta encoding collapses to zero. Same
+    for Floyd-Steinberg dithering - it randomises pixels frame to frame.
+    A stable global palette + no dither makes static regions byte-identical,
+    which is the whole precondition for delta frames to work."""
+    step = max(1, len(frames) // 24)
+    sheet = Image.new("RGB", (128, 96 * len(frames[::step])))
+    for i, f in enumerate(frames[::step]):
+        sheet.paste(Image.open(f).convert("RGB").resize((128, 96)), (0, i * 96))
+    q = sheet.quantize(colors=n, method=Image.MEDIANCUT)
+    pal = q.getpalette()[:n * 3]
+    snap = lambda v: min(255, int(round(v / 255.0 * 7)) * 36)
     colors = [(0, 0, 0)]
-    for i in range(15):
+    for i in range(n):
         r, g, b = pal[i*3:i*3+3]
-        # snap to the VDP grid so the preview matches the hardware
-        snap = lambda v: min(255, int(round(v / 255.0 * 7)) * 36)
         colors.append((snap(r), snap(g), snap(b)))
-    return idx, colors
+    return colors
+
+def quantize(img, colors):
+    """Map to the fixed palette. No dither: stability beats gradients here."""
+    pimg = Image.new("P", (1, 1))
+    flat = []
+    for c in colors[1:]:
+        flat += list(c)
+    pimg.putpalette(flat + [0] * (768 - len(flat)))
+    q = img.convert("RGB").quantize(palette=pimg, dither=Image.NONE)
+    return np.asarray(q, dtype=np.uint8) + 1
 
 def to_tiles(idx, tw, th):
     """Return (list_of_32B_tiles, tilemap) with duplicates collapsed."""
@@ -108,20 +134,19 @@ def main():
         if not frames:
             print("no frames extracted"); sys.exit(1)
         print(f"{len(frames)} frames at {a.w}x{a.h} ({tw}x{th} tiles), {a.fps} fps")
+        colors = build_palette(frames)
+        print(f"global palette: {len(colors)} colours (stable across frames)")
 
         body = bytearray()
         prev_tiles, prev_map = {}, {}
         peak = 0
         raw_total = 0
         for fi, fp in enumerate(frames):
-            idx, colors = quantize(Image.open(fp))
+            idx = quantize(Image.open(fp), colors)
             tiles, tmap = to_tiles(idx, tw, th)
             raw_total += len(tiles) * 32
 
-            # palette
             fr = bytearray()
-            for r, g, b in colors:
-                fr += struct.pack(">H", vdp_color(r, g, b))
 
             # delta: only tiles whose CONTENT changed in that slot
             changed = [(s, t) for s, t in enumerate(tiles)
@@ -144,7 +169,9 @@ def main():
                 print(f"  frame {fi:4d}  {len(tiles):4d} tiles  "
                       f"{len(changed):4d} changed  {len(mchg):4d} map")
 
-        hdr = struct.pack(">4sHHHHI", b"EIV1", tw, th, len(frames), a.fps, peak)
+        hdr = struct.pack(">4sHHHHI", b"EIV2", tw, th, len(frames), a.fps, peak)
+        for r, g, b in colors:                       # one global palette
+            hdr += struct.pack(">H", vdp_color(r, g, b))
         out = Path(a.out)
         out.parent.mkdir(exist_ok=True)
         out.write_bytes(hdr + bytes(body))
