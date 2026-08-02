@@ -644,7 +644,8 @@ static void panelWindow(u16 x, u16 y, u16 w, u16 h, const char *title)
 /* ================================================================== */
 #define RUN_TILE   (TW_TILE_INDEX + TW_NICONS)
 #define RUN_NTILES 10      /* 2 runner frames x4 tiles + 2 ring frames */
-#define RUN_Y      150     /* pixel row: on the checkerboard floor     */
+#define RUN_Y      134     /* pixel row: on the checkerboard floor,
+                              clear of the ELYA panel border at y=152 */
 #define N_RINGS    3
 
 static u32 runTiles[RUN_NTILES * 8];
@@ -713,6 +714,7 @@ static void runAnimate(u16 frame)
 {
     if (!runVisible) {
         VDP_setSpriteFull(0, 0, 0, SPRITE_SIZE(1, 1), 0, 0);
+        VDP_updateSprites(1, CPU);
         return;
     }
 
@@ -731,16 +733,22 @@ static void runAnimate(u16 frame)
     }
 
     u16 f = ((frame >> 2) & 1) ? 4 : 0;           /* 2-frame run cycle */
-    VDP_setSpriteFull(0, runX + 128, RUN_Y + 128, SPRITE_SIZE(2, 2),
+    /* SGDK adds the 0x80 hardware offset inside VDP_setSpriteFull — pass
+     * SCREEN coordinates. Adding 128 here put the runner at hw Y=406,
+     * permanently below the visible area. */
+    VDP_setSpriteFull(0, runX, RUN_Y, SPRITE_SIZE(2, 2),
                       TILE_ATTR_FULL(PAL1, TRUE, FALSE, FALSE, RUN_TILE + f),
                       1);
     for (u16 i = 0; i < N_RINGS; i++) {
         u16 rt = RUN_TILE + 8 + (ringPop[i] ? 1 : ((frame >> 3) & 1));
         s16 ry = RUN_Y + 4 - (ringPop[i] ? (12 - ringPop[i]) : 0);
-        VDP_setSpriteFull(1 + i, ringX[i] + 128, ry + 128, SPRITE_SIZE(1, 1),
+        VDP_setSpriteFull(1 + i, ringX[i], ry, SPRITE_SIZE(1, 1),
                           TILE_ATTR_FULL(PAL2, TRUE, FALSE, FALSE, rt),
                           (i == N_RINGS - 1) ? 0 : (2 + i));
     }
+    /* VDP_setSpriteFull only fills SGDK's RAM cache — nothing reaches
+     * VRAM until this call. Without it the runner never appears. */
+    VDP_updateSprites(1 + N_RINGS, CPU);
 }
 
 static void drawTokSpeed(void)
