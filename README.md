@@ -5,6 +5,13 @@ a lookup table — an integer-only ternary language model doing live inference
 on a Motorola 68000 at 7.67 MHz, with no FPU and no 32-bit multiply, in
 64 KB of work RAM.
 
+**[▶ Watch the demo](https://github.com/Scottcjn/legend-of-elya-genesis/releases/tag/v0.1.0)**
+(emulator capture, with the live tok/s counter on screen) — the release also
+has `rom.bin`, which runs in BlastEm / Genesis Plus GX or on real hardware
+via flash cart. She can still ramble past the end of an answer; the model is
+a work in progress — the claim is coherent local inference, not a polished
+chatbot.
+
 Ask her a question with the D-pad. Watch the MIND window pick which part of
 her mind answers. She thinks at about **1.2 tokens per second**, and a tiny
 version of her runs along the floor collecting rings while she does —
