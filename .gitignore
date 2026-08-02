@@ -10,3 +10,5 @@ host/harness_full
 host/harness_topk
 res/resources.h
 res/resources.rs
+__pycache__/
+*.pyc
