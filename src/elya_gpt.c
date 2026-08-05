@@ -14,6 +14,109 @@ static uint16_t rd16be(const uint8_t *p) {
     return (uint16_t)((p[0] << 8) | p[1]);
 }
 
+/* Same value, but for a pointer the format GUARANTEES is 2-byte aligned.
+ * On the (big-endian) 68000 that is one MOVE.W off the 16-bit cart bus
+ * instead of two byte reads, a shift and an OR. */
+static inline uint16_t rd16be_a(const uint8_t *p) {
+#if defined(__m68k__) && !defined(__mcoldfire__)
+    return *(const uint16_t *)p;
+#else
+    return (uint16_t)((p[0] << 8) | p[1]);
+#endif
+}
+
+/* in[] element at a pre-doubled byte offset held in the W16 index stream. */
+/* The cast to int16_t is load-bearing on 68000: it lets GCC use the
+ * (An,Dn.W) index mode instead of zero-extending into a full 32-bit
+ * register first. Offsets are 0..510 so the cast is exact. */
+#define EG_IN_AT(inb, p) \
+    (*(const int16_t *)((inb) + (int16_t)rd16be_a(p)))
+
+/* Accumulate floor(N/4) groups of four W16 stream entries into ACC,
+ * advancing P and leaving the 0..3 remainder in N.
+ *
+ * This is the innermost loop of the entire engine (2.5M iterations per
+ * 38-token run), so it is worth saying exactly what we want. GCC's best
+ * output was 34 cycles per weight:
+ *     move.w (a5),a3 ; move.w (a0,a3.l),d0 ; ext.l d0 ; add.l a1,d0
+ * plus 6 more for ADDQ/CMP/Bcc loop control. Loading the offset into a DATA
+ * register lets the (An,Dn.W) index mode read straight into an ADDRESS
+ * register, which sign-extends for free and needs no EXT.L (30 cycles), and
+ * DBRA replaces the three-instruction loop tail (2.5 instead of 6). The C
+ * fallback below is what the host harness builds, so both stay identical. */
+#if defined(__m68k__) && !defined(__mcoldfire__)
+#define EG_W16_STEP(OP)                     \
+    "move.w (%[p])+,%[ix]\n\t"              \
+    "move.w (%[in],%[ix].w),%[v]\n\t"       \
+    OP " %[v],%[acc]\n\t"
+#define EG_W16_RUN4(OP, ACC, P, INB, N)                                  \
+    do {                                                                 \
+        if ((N) >= 4) {                                                  \
+            uint16_t eg__g = (uint16_t)(((N) >> 2) - 1);                 \
+            const uint8_t *eg__v;                                        \
+            int32_t eg__ix;                                              \
+            __asm__ (                                                    \
+                "1:\n\t"                                                 \
+                EG_W16_STEP(OP) EG_W16_STEP(OP)                          \
+                EG_W16_STEP(OP) EG_W16_STEP(OP)                          \
+                "dbra %[g],1b"                                           \
+                : [acc]"+d"(ACC), [p]"+a"(P), [v]"=&a"(eg__v),           \
+                  [ix]"=&d"(eg__ix), [g]"+d"(eg__g)                      \
+                : [in]"a"(INB)                                           \
+                : "cc", "memory");                                       \
+            (N) &= 3;                                                    \
+        }                                                                \
+    } while (0)
+/* ...and the 0..3 tail. GCC turned `while (i--)` into a CMPI/Bcc ladder
+ * that measured as ~10% of the whole run; one DBRA loop is smaller and
+ * branch-free per element. */
+#define EG_W16_RUN1(OP, ACC, P, INB, N)                                  \
+    do {                                                                 \
+        if ((N)) {                                                       \
+            uint16_t eg__g = (uint16_t)((N) - 1);                        \
+            const uint8_t *eg__v;                                        \
+            int32_t eg__ix;                                              \
+            __asm__ (                                                    \
+                "1:\n\t"                                                 \
+                EG_W16_STEP(OP)                                          \
+                "dbra %[g],1b"                                           \
+                : [acc]"+d"(ACC), [p]"+a"(P), [v]"=&a"(eg__v),           \
+                  [ix]"=&d"(eg__ix), [g]"+d"(eg__g)                      \
+                : [in]"a"(INB)                                           \
+                : "cc", "memory");                                       \
+            (N) = 0;                                                     \
+        }                                                                \
+    } while (0)
+#else
+#define EG_W16_RUN4(OP, ACC, P, INB, N)                                  \
+    do {                                                                 \
+        while ((N) >= 4) {                                               \
+            if (OP[0] == 'a') {                                          \
+                (ACC) += EG_IN_AT(INB, P);                               \
+                (ACC) += EG_IN_AT(INB, (P) + 2);                         \
+                (ACC) += EG_IN_AT(INB, (P) + 4);                         \
+                (ACC) += EG_IN_AT(INB, (P) + 6);                         \
+            } else {                                                     \
+                (ACC) -= EG_IN_AT(INB, P);                               \
+                (ACC) -= EG_IN_AT(INB, (P) + 2);                         \
+                (ACC) -= EG_IN_AT(INB, (P) + 4);                         \
+                (ACC) -= EG_IN_AT(INB, (P) + 6);                         \
+            }                                                            \
+            (P) += 8;                                                    \
+            (N) -= 4;                                                    \
+        }                                                                \
+    } while (0)
+#define EG_W16_RUN1(OP, ACC, P, INB, N)                                  \
+    do {                                                                 \
+        while ((N)) {                                                    \
+            if (OP[0] == 'a') (ACC) += EG_IN_AT(INB, P);                 \
+            else              (ACC) -= EG_IN_AT(INB, P);                 \
+            (P) += 2;                                                    \
+            (N)--;                                                       \
+        }                                                                \
+    } while (0)
+#endif
+
 /* 16x16 -> 32 signed multiply.
  * The 68000 HAS MULS.W (70 cycles) but no 32x32 multiply, so any C
  * expression GCC believes is 32-bit becomes a __mulsi3 call: three
@@ -22,11 +125,65 @@ static uint16_t rd16be(const uint8_t *p) {
  * outright. The host path is plain C, keeping both builds identical. */
 static inline int32_t mul_ss(int16_t a, int16_t b) {
 #if defined(__m68k__) && !defined(__mcoldfire__)
-    int32_t r = a;
-    __asm__ ("muls.w %1,%0" : "+d"(r) : "dm"(b));
+    /* `int32_t r = a;` made GCC emit an EXT.L that MULS.W then overwrites
+     * anyway -- 4 dead cycles on every product. Only the low word has to be
+     * set before the multiply. */
+    int32_t r;
+    __asm__ ("move.w %1,%0\n\tmuls.w %2,%0" : "=&d"(r) : "dmi"(a), "dm"(b));
     return r;
 #else
     return (int32_t)a * (int32_t)b;
+#endif
+}
+
+/* 32x16 -> low 32 signed multiply.
+ * The requant step is `acc * M` with acc a 32-bit accumulator and M a
+ * per-tensor multiplier that is always < 128 in the shipped blobs. GCC
+ * therefore has to call __mulsi3 (three MULU.W plus call/return and the
+ * argument push), ~280 cycles, once per output row — 1152 rows per forward
+ * pass. Two MULU.W do the same job: the low 32 bits of a two's-complement
+ * product only need the low half of the multiplier, and the high partial
+ * product is shifted left 16 so its own overflow is discarded. Bit-identical
+ * to `acc * (int32_t)M` including the wrap on overflow. */
+static inline int32_t mul32x16(int32_t a, uint16_t m) {
+#if defined(__m68k__) && !defined(__mcoldfire__)
+    /* Most accumulators still fit in 16 bits, and m is < 128, so one
+     * MULS.W (~50 cycles) covers them exactly. */
+    if ((int32_t)(int16_t)a == a) {
+        int32_t r = a;
+        __asm__ ("muls.w %1,%0" : "+d"(r) : "dm"(m));
+        return r;
+    }
+    uint32_t lo = (uint32_t)a & 0xFFFFu;
+    uint32_t hi = (uint32_t)a >> 16;
+    __asm__ ("mulu.w %1,%0" : "+d"(lo) : "dm"(m));
+    __asm__ ("mulu.w %1,%0" : "+d"(hi) : "dm"(m));
+    return (int32_t)(lo + (hi << 16));
+#else
+    return a * (int32_t)m;
+#endif
+}
+
+/* sat16(num / den) for a POSITIVE den that fits in 16 bits.
+ * GCC has to call __divsi3 for a 32/32 divide (~600 cycles); the 68000's
+ * own DIVS.W does 32/16 in <=158. It traps on den==0 (callers guarantee
+ * den>0) and sets V when the quotient will not fit in 16 bits -- which is
+ * exactly the case sat16 was going to clamp anyway, and since den>0 the
+ * quotient's sign is num's sign. So this is bit-identical to
+ * sat16(num/den), including C's truncate-toward-zero. */
+static inline int16_t div_sat16(int32_t num, int16_t den) {
+#if defined(__m68k__) && !defined(__mcoldfire__)
+    int32_t q = num;
+    uint8_t ovf;
+    __asm__ ("divs.w %2,%0\n\tsvs %1"
+             : "+d"(q), "=d"(ovf) : "dm"(den) : "cc");
+    if (ovf) return (num < 0) ? (int16_t)-32768 : (int16_t)32767;
+    return (int16_t)q;
+#else
+    int32_t v = num / den;
+    if (v > 32767)  return 32767;
+    if (v < -32768) return -32768;
+    return (int16_t)v;
 #endif
 }
 
@@ -55,6 +212,8 @@ static uint16_t isqrt32(uint32_t v) {
  * engine binary reads both index-stream and 2-bit-packed weights. That is
  * what makes an honest 68000 A/B possible: two ROMs, same code, same
  * weights, only the layout differs. */
+/* 0 = SGT1 2-bit packed, 1 = byte index streams, 2 = W16 index streams
+ * (pre-doubled big-endian u16 byte offsets, flags bit3). */
 static uint8_t eg_streams = 1;
 
 static void eg_matvec(const EgTensor *t, const int16_t *in, int16_t *out,
@@ -63,7 +222,29 @@ static void eg_matvec(const EgTensor *t, const int16_t *in, int16_t *out,
     uint16_t M = t->M;
     uint8_t  S = t->S;
 
-if (eg_streams) {
+if (eg_streams == 2) {
+    /* W16: same rows as T2, but each index is a 2-byte big-endian BYTE
+     * OFFSET into `in` (i.e. the index already doubled by the exporter).
+     * That removes the zero-extend and the doubling from the innermost
+     * loop in the whole engine, and halves its cart-ROM bus traffic. The
+     * rows are aligned by construction, so MOVE.W is legal. */
+    const uint8_t *p   = t->packed;
+    const uint8_t *inb = (const uint8_t *)in;
+    (void)in_dim;
+    for (int16_t o = 0; o < out_dim; o++) {
+        /* aligned reads: the row header is 2 MOVE.W, not 2x(byte,shift,or) */
+        uint16_t na = rd16be_a(p); p += 2;
+        uint16_t ns = rd16be_a(p); p += 2;
+        int32_t acc = 0;
+        uint16_t i = na;
+        EG_W16_RUN4("add.l", acc, p, inb, i);
+        EG_W16_RUN1("add.l", acc, p, inb, i);
+        i = ns;
+        EG_W16_RUN4("sub.l", acc, p, inb, i);
+        EG_W16_RUN1("sub.l", acc, p, inb, i);
+        out[o] = sat16(mul32x16(acc, M) >> S);
+    }
+} else if (eg_streams) {
     /* T2: each row is (u16 n_add, u16 n_sub, add idx bytes, sub idx bytes).
      * No bit unpacking and no per-weight branch — zero weights are simply
      * absent. Compiles to MOVE.B (A1)+,D0 / ADD.W (A2,D0.W),D2 on 68K. */
@@ -73,9 +254,28 @@ if (eg_streams) {
         uint16_t na = rd16be(p); p += 2;
         uint16_t ns = rd16be(p); p += 2;
         int32_t acc = 0;
-        for (uint16_t i = 0; i < na; i++) acc += in[*p++];
-        for (uint16_t i = 0; i < ns; i++) acc -= in[*p++];
-        out[o] = sat16((acc * (int32_t)M) >> S);
+        uint16_t i;
+        /* Unrolled 4x. The body is 4 instructions per weight; the loop
+         * control (CMP.L + Bcc) was another 16 cycles on top of that, i.e.
+         * ~28% of the inner loop, and GCC will not unroll a loop whose trip
+         * count it cannot see. Same terms, same order -> same int32 sum. */
+        for (i = na; i >= 8; i -= 8) {
+            acc += in[p[0]]; acc += in[p[1]];
+            acc += in[p[2]]; acc += in[p[3]];
+            acc += in[p[4]]; acc += in[p[5]];
+            acc += in[p[6]]; acc += in[p[7]];
+            p += 8;
+        }
+        while (i--) acc += in[*p++];
+        for (i = ns; i >= 8; i -= 8) {
+            acc -= in[p[0]]; acc -= in[p[1]];
+            acc -= in[p[2]]; acc -= in[p[3]];
+            acc -= in[p[4]]; acc -= in[p[5]];
+            acc -= in[p[6]]; acc -= in[p[7]];
+            p += 8;
+        }
+        while (i--) acc -= in[*p++];
+        out[o] = sat16(mul32x16(acc, M) >> S);
     }
 } else {
     /* 2-bit packed, 4 weights per byte */
@@ -97,7 +297,7 @@ if (eg_streams) {
             if (c == 1) acc += ip[3]; else if (c == 2) acc -= ip[3];
             ip += 4;
         }
-        out[o] = sat16((acc * (int32_t)M) >> S);
+        out[o] = sat16(mul32x16(acc, M) >> S);
     }
 }
 }
@@ -227,12 +427,29 @@ static void eg_layer(EgState *st, int16_t li, int16_t slot, int16_t n_ctx)
         if (sum8 == 0) sum8 = 1;
 
         /* weighted V sum over survivors. int16 x int8 keeps this a
-         * single MULS.W per term on 68000. */
-        for (int16_t d = 0; d < EG_HD; d++) {
-            int32_t num = 0;
-            for (int16_t s = 0; s < nsel; s++)
-                num += mul_ss(s_selsc[s], (int16_t)st->vc[li][s_selix[s]][off + d]);
-            s_attn[off + d] = sat16(num / sum8);
+         * single MULS.W per term on 68000.
+         *
+         * Loop order is survivor-OUTER / depth-INNER. With depth outer the
+         * 68000 recomputed `s_selix[s] * EG_EMBED` (an LSL.L #6 plus two
+         * LEAs) for every (s,d) pair — ~90 of the ~180 cycles per term went
+         * into address arithmetic for a byte it then read once. Hoisting the
+         * row pointer out of the depth loop computes it once per survivor
+         * and walks the row with a post-increment.
+         *
+         * Byte-identical: each num[d] still accumulates the same terms in
+         * the same s order, and int32 addition is exact
+         * (64 * 16384 * 127 = 133M < 2^31). */
+        {
+            int32_t num[EG_HD];
+            for (int16_t d = 0; d < EG_HD; d++) num[d] = 0;
+            for (int16_t s = 0; s < nsel; s++) {
+                int16_t w = s_selsc[s];
+                const int8_t *vp = st->vc[li][s_selix[s]] + off;
+                for (int16_t d = 0; d < EG_HD; d++)
+                    num[d] += mul_ss(w, (int16_t)*vp++);
+            }
+            for (int16_t d = 0; d < EG_HD; d++)
+                s_attn[off + d] = div_sat16(num[d], (int16_t)sum8);
         }
     }
 
@@ -261,10 +478,11 @@ static const uint8_t *eg_scan_tensor(EgTensor *t, const uint8_t *p,
     t->S = *p++;      p++;                    /* pad */
     t->packed = p;
     if (eg_streams) {
+        uint16_t w = (uint16_t)eg_streams;      /* 1 = bytes, 2 = words */
         for (uint16_t r = 0; r < rows; r++) {
             uint16_t na = rd16be(p);
             uint16_t ns = rd16be(p + 2);
-            p += 4 + na + ns;
+            p += 4 + (uint32_t)(na + ns) * w;
         }
     } else {
         p += wcount >> 2;
@@ -376,7 +594,10 @@ int eg_init(EgState *st, const uint8_t *blob)
 
     /* ---- SGTM: Lock-On MoE (shared embedding + N banked experts) ---- */
     if (blob[3] == 'M') {
-        eg_streams = (rd16be(blob + 14) & 2) ? 1 : 0;
+        {
+            uint16_t fl = rd16be(blob + 14);
+            eg_streams = (fl & 8) ? 2 : ((fl & 2) ? 1 : 0);
+        }
         {
         uint16_t ne = blob[4];
         if (ne == 0 || ne > EG_MAX_EXPERTS) return -5;
@@ -411,7 +632,7 @@ int eg_init(EgState *st, const uint8_t *blob)
 
     /* ---- SGT1 / SGT2: single model, treated as one expert ---------- */
     if (blob[3] != '1' && blob[3] != '2' && blob[3] != '3') return -1;
-    eg_streams = (blob[12] & 2) ? 1 : 0;
+    eg_streams = (blob[12] & 8) ? 2 : ((blob[12] & 2) ? 1 : 0);
     if (blob[4] != EG_LAYERS || blob[5] != EG_HEADS) return -2;
     if (rd16be(blob + 6) != EG_EMBED || rd16be(blob + 8) != EG_VOCAB)
         return -3;
@@ -505,19 +726,35 @@ uint8_t eg_next_token(EgState *st, uint8_t input)
     {
         int32_t best = (int32_t)0x80000000;
         int16_t bestv = ' ';
+        const int16_t *xv = st->x;
+        /* 96 vocab entries x 64 dims per token. Two things matter on 68000:
+         *  - unroll, so the CMP/Bcc pair is amortised 4 ways;
+         *  - put the int8 embedding weight in the MULS.W *source* operand.
+         *    MULS.W costs 38 + 2n cycles where n counts bit transitions in
+         *    the SOURCE; a sign-extended int8 has far fewer than a full
+         *    Q3.12 activation. Multiplication is commutative, so the
+         *    products - and therefore the argmax - are unchanged. */
         for (int16_t v = 32; v <= 126; v++) {
             const int8_t *e = st->emb + (uint32_t)v * EG_EMBED;
             int32_t acc = 0;
-            for (int16_t i = 0; i < EG_EMBED; i++)
-                acc += (int32_t)e[i] * st->x[i];
+            for (int16_t i = 0; i < EG_EMBED; i += 4) {
+                acc += mul_ss(xv[i],     (int16_t)e[i]);
+                acc += mul_ss(xv[i + 1], (int16_t)e[i + 1]);
+                acc += mul_ss(xv[i + 2], (int16_t)e[i + 2]);
+                acc += mul_ss(xv[i + 3], (int16_t)e[i + 3]);
+            }
             if (acc > best) { best = acc; bestv = v; }
         }
         /* newline is a legal stop token too: compare its logit */
         {
             const int8_t *e = st->emb + 10u * EG_EMBED;
             int32_t acc = 0;
-            for (int16_t i = 0; i < EG_EMBED; i++)
-                acc += (int32_t)e[i] * st->x[i];
+            for (int16_t i = 0; i < EG_EMBED; i += 4) {
+                acc += mul_ss(xv[i],     (int16_t)e[i]);
+                acc += mul_ss(xv[i + 1], (int16_t)e[i + 1]);
+                acc += mul_ss(xv[i + 2], (int16_t)e[i + 2]);
+                acc += mul_ss(xv[i + 3], (int16_t)e[i + 3]);
+            }
             if (acc > best) bestv = '\n';
         }
 

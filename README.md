@@ -80,8 +80,23 @@ day, and the corrections are more useful than the originals:
   The static estimate on the real target is ~1.7–3x. The two machines
   differ most exactly where the two weight formats differ: x86 punishes the
   old format's data-dependent branch with ~15–20 cycle mispredictions, and
-  the 68000 has no branch predictor to mispredict. **No 68000 cycle
-  measurement exists yet.** See `docs/SPEED_PLAN.md`.
+  the 68000 has no branch predictor to mispredict. See `docs/SPEED_PLAN.md`.
+
+  **Resolved.** A 68000 cycle measurement now exists (`tools/mame/`, MAME
+  memory taps, exact bus cycles, reproducible to the integer across runs).
+  On real Genesis timings, 24 generated tokens from a 14-token prompt:
+
+  | | cycles | cycles/token | tok/s |
+  |---|---|---|---|
+  | before | 220,579,814 | 5,804,732 | 1.32 |
+  | after  | 142,972,761 | 3,762,441 | 1.96 |
+
+  That is **1.543x**, not 11.3x, and it is the number to quote. The static
+  estimate of 1.7–3x was optimistic but the right order; the x86 figure was
+  not. Two further honest caveats: the bench runs with display and
+  interrupts off for determinism, so in-game cost is somewhat higher; and
+  the profiler disagreed sharply with our own static budget, which had
+  attention at 12% and matvec at 52% against a measured 7% and 68%.
 - **A documented Top-K attention result was retracted** — the selection
   loop kept the first K survivors in ring-buffer scan order, not the
   strongest K. It never tested Top-K, and the causal story built on it was

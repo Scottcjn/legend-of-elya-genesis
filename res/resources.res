@@ -1,4 +1,4 @@
-BIN elya_weights "elya_brain.bin" 256
+BIN elya_weights "elya_brain_w16.bin" 256
 BIN intro_data "intro.bin" 256
 WAV elyan_chant "elyan_chant.wav" PCM 22050
 XGM dream_theme "dream_theme.vgm"
