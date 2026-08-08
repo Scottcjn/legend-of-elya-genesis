@@ -117,6 +117,88 @@ static inline uint16_t rd16be_a(const uint8_t *p) {
     } while (0)
 #endif
 
+/* ---- input-major (transposed) step ------------------------------------
+ * The mirror image of EG_W16_STEP. There the stream held an offset into
+ * the INPUT and the value came back into an accumulator register; here the
+ * stream holds an offset into an accumulator ARRAY and the value is
+ * already in a register, so the memory access becomes a read-modify-write:
+ *
+ *     move.w (a2)+,d1            8 cycles
+ *     add.l  d0,(a3,d1.w)       12 + 14 EA = 26 cycles
+ *
+ * 34 cycles per weight against 30 for the output-major step — the
+ * transposed loop is ~13% MORE expensive per weight. It only wins because
+ * it never executes at all for an input ReLU zeroed, and 56.5% of wff2's
+ * weights point at one of those. Offsets are pre-multiplied by 4 by the
+ * exporter (o*4, range 0..252), so there is no shift and no zero-extend,
+ * exactly as the W16 conversion pre-doubled its own indices. */
+#if defined(__m68k__) && !defined(__mcoldfire__)
+#define EG_T16_STEP(OP)                     \
+    "move.w (%[p])+,%[ix]\n\t"              \
+    OP " %[v],(%[ab],%[ix].w)\n\t"
+#define EG_T16_RUN4(OP, V, P, AB, N)                                     \
+    do {                                                                 \
+        if ((N) >= 4) {                                                  \
+            uint16_t eg__g = (uint16_t)(((N) >> 2) - 1);                 \
+            int32_t eg__ix;                                              \
+            __asm__ (                                                    \
+                "1:\n\t"                                                 \
+                EG_T16_STEP(OP) EG_T16_STEP(OP)                          \
+                EG_T16_STEP(OP) EG_T16_STEP(OP)                          \
+                "dbra %[g],1b"                                           \
+                : [p]"+a"(P), [ix]"=&d"(eg__ix), [g]"+d"(eg__g)          \
+                : [v]"d"(V), [ab]"a"(AB)                                 \
+                : "cc", "memory");                                       \
+            (N) &= 3;                                                    \
+        }                                                                \
+    } while (0)
+#define EG_T16_RUN1(OP, V, P, AB, N)                                     \
+    do {                                                                 \
+        if ((N)) {                                                       \
+            uint16_t eg__g = (uint16_t)((N) - 1);                        \
+            int32_t eg__ix;                                              \
+            __asm__ (                                                    \
+                "1:\n\t"                                                 \
+                EG_T16_STEP(OP)                                          \
+                "dbra %[g],1b"                                           \
+                : [p]"+a"(P), [ix]"=&d"(eg__ix), [g]"+d"(eg__g)          \
+                : [v]"d"(V), [ab]"a"(AB)                                 \
+                : "cc", "memory");                                       \
+            (N) = 0;                                                     \
+        }                                                                \
+    } while (0)
+#else
+/* Accumulator slot at a pre-quadrupled byte offset held in the stream. */
+#define EG_ACC_AT(ab, p) (*(int32_t *)((ab) + (int16_t)rd16be_a(p)))
+#define EG_T16_RUN4(OP, V, P, AB, N)                                     \
+    do {                                                                 \
+        while ((N) >= 4) {                                               \
+            if (OP[0] == 'a') {                                          \
+                EG_ACC_AT(AB, P)       += (V);                           \
+                EG_ACC_AT(AB, (P) + 2) += (V);                           \
+                EG_ACC_AT(AB, (P) + 4) += (V);                           \
+                EG_ACC_AT(AB, (P) + 6) += (V);                           \
+            } else {                                                     \
+                EG_ACC_AT(AB, P)       -= (V);                           \
+                EG_ACC_AT(AB, (P) + 2) -= (V);                           \
+                EG_ACC_AT(AB, (P) + 4) -= (V);                           \
+                EG_ACC_AT(AB, (P) + 6) -= (V);                           \
+            }                                                            \
+            (P) += 8;                                                    \
+            (N) -= 4;                                                    \
+        }                                                                \
+    } while (0)
+#define EG_T16_RUN1(OP, V, P, AB, N)                                     \
+    do {                                                                 \
+        while ((N)) {                                                    \
+            if (OP[0] == 'a') EG_ACC_AT(AB, P) += (V);                   \
+            else              EG_ACC_AT(AB, P) -= (V);                   \
+            (P) += 2;                                                    \
+            (N)--;                                                       \
+        }                                                                \
+    } while (0)
+#endif
+
 /* 16x16 -> 32 signed multiply.
  * The 68000 HAS MULS.W (70 cycles) but no 32x32 multiply, so any C
  * expression GCC believes is 32-bit becomes a __mulsi3 call: three
@@ -215,6 +297,56 @@ static uint16_t isqrt32(uint32_t v) {
 /* 0 = SGT1 2-bit packed, 1 = byte index streams, 2 = W16 index streams
  * (pre-doubled big-endian u16 byte offsets, flags bit3). */
 static uint8_t eg_streams = 1;
+/* flags bit4: wff2 is stored INPUT-MAJOR (transposed). Requires bit3. */
+static uint8_t eg_wff2_t = 0;
+
+/* Rows in a wff2 tensor's stream: EG_FFN columns when transposed, else
+ * EG_EMBED output rows. eg_scan_tensor needs this to find the tensor end. */
+#define EG_WFF2_ROWS (eg_wff2_t ? (uint16_t)EG_FFN : (uint16_t)EG_EMBED)
+
+/* ---- input-major matvec: out = requant(W * in), skipping zero inputs ---
+ * Same result as eg_matvec, reached by walking the INPUT instead of the
+ * output. Each accumulator receives the identical set of +/- terms, just in
+ * a different order; int32 addition is exact and cannot overflow here
+ * (256 terms x 32767 = 8,388,352, well inside 2^31), so the output is
+ * bit-identical.
+ *
+ * The point is the `if (v == 0)` skip: one pointer add jumps the whole
+ * weight list for an input ReLU zeroed, without reading one index from
+ * cart ROM. Only wff2 is stored this way — every other tensor's input is
+ * dense, so they would pay the more expensive step for no skips. */
+static int32_t s_facc[EG_EMBED];
+
+static void eg_matvec_t(const EgTensor *t, const int16_t *in, int16_t *out,
+                        int16_t in_dim, int16_t out_dim)
+{
+    uint16_t M = t->M;
+    uint8_t  S = t->S;
+    const uint8_t *p = t->packed;
+    uint8_t *ab = (uint8_t *)s_facc;
+
+    for (int16_t o = 0; o < out_dim; o++) s_facc[o] = 0;
+
+    for (int16_t i = 0; i < in_dim; i++) {
+        uint16_t na = rd16be_a(p);
+        uint16_t ns = rd16be_a(p + 2);
+        p += 4;
+        int32_t v = in[i];
+        if (v == 0) {                       /* ReLU zero: skip the column */
+            p += ((uint32_t)na + ns) << 1;
+            continue;
+        }
+        uint16_t n = na;
+        EG_T16_RUN4("add.l", v, p, ab, n);
+        EG_T16_RUN1("add.l", v, p, ab, n);
+        n = ns;
+        EG_T16_RUN4("sub.l", v, p, ab, n);
+        EG_T16_RUN1("sub.l", v, p, ab, n);
+    }
+
+    for (int16_t o = 0; o < out_dim; o++)
+        out[o] = sat16(mul32x16(s_facc[o], M) >> S);
+}
 
 static void eg_matvec(const EgTensor *t, const int16_t *in, int16_t *out,
                       int16_t in_dim, int16_t out_dim)
@@ -535,9 +667,12 @@ static void eg_layer(EgState *st, int16_t li, int16_t slot, int16_t n_ctx)
         eg_st_ff_total++;
         if (s_ff[i] == 0) eg_st_ff_zero++;
     }
-    eg_stat_scan(&st->wff2[li], s_ff, EG_EMBED, 1);
+    if (!eg_wff2_t) eg_stat_scan(&st->wff2[li], s_ff, EG_EMBED, 1);
 #endif
-    eg_matvec(&st->wff2[li], s_ff, s_proj, EG_FFN, EG_EMBED);
+    if (eg_wff2_t)
+        eg_matvec_t(&st->wff2[li], s_ff, s_proj, EG_FFN, EG_EMBED);
+    else
+        eg_matvec(&st->wff2[li], s_ff, s_proj, EG_FFN, EG_EMBED);
     for (int16_t i = 0; i < EG_EMBED; i++)
         x[i] = sat16((int32_t)s_res[i] + s_proj[i]);
 }
@@ -579,7 +714,7 @@ void eg_select_expert(EgState *st, uint16_t expert)
         p = eg_scan_tensor(&st->wo[li],   p, EG_EMBED, EG_EMBED * EG_EMBED);
         p = eg_scan_tensor(&st->wff1[li], p, EG_FFN,
                            (uint32_t)EG_FFN * EG_EMBED);
-        p = eg_scan_tensor(&st->wff2[li], p, EG_EMBED,
+        p = eg_scan_tensor(&st->wff2[li], p, EG_WFF2_ROWS,
                            (uint32_t)EG_EMBED * EG_FFN);
     }
 }
@@ -671,6 +806,9 @@ int eg_init(EgState *st, const uint8_t *blob)
         {
             uint16_t fl = rd16be(blob + 14);
             eg_streams = (fl & 8) ? 2 : ((fl & 2) ? 1 : 0);
+            /* bit4 only means anything on top of bit3 (W16); the
+             * transposed stream is defined in terms of W16 offsets. */
+            eg_wff2_t  = (eg_streams == 2 && (fl & 0x10)) ? 1 : 0;
         }
         {
         uint16_t ne = blob[4];
@@ -707,6 +845,7 @@ int eg_init(EgState *st, const uint8_t *blob)
     /* ---- SGT1 / SGT2: single model, treated as one expert ---------- */
     if (blob[3] != '1' && blob[3] != '2' && blob[3] != '3') return -1;
     eg_streams = (blob[12] & 8) ? 2 : ((blob[12] & 2) ? 1 : 0);
+    eg_wff2_t  = (eg_streams == 2 && (blob[12] & 0x10)) ? 1 : 0;
     if (blob[4] != EG_LAYERS || blob[5] != EG_HEADS) return -2;
     if (rd16be(blob + 6) != EG_EMBED || rd16be(blob + 8) != EG_VOCAB)
         return -3;
@@ -734,7 +873,8 @@ int eg_init(EgState *st, const uint8_t *blob)
         order[5] = &st->wff2[li]; wcount[5] = (uint32_t)EG_EMBED * EG_FFN;
         rows[0] = rows[1] = rows[2] = rows[3] = EG_EMBED;
         rows[4] = EG_FFN;                  /* wff1: FFN outputs */
-        rows[5] = EG_EMBED;                /* wff2: EMBED outputs */
+        rows[5] = EG_WFF2_ROWS;            /* wff2: EMBED rows, or FFN
+                                            * columns when transposed */
         for (int16_t ti = 0; ti < 6; ti++) {
             order[ti]->M = rd16be(p); p += 2;
             order[ti]->S = *p++;      p++;         /* pad */
