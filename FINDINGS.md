@@ -199,3 +199,73 @@ branch on all 19,456 columns per run instead of on 4,864 rows.
 
 The estimate said ~8.5%. The measurement says **7.83%** — the estimate was
 good, and slightly optimistic by exactly the amount the indirection costs.
+
+---
+
+## [5] Backward compatibility and the REAL ROM
+
+**Old blobs still load, on real 68000, in the new engine binary.** Both
+older layouts were run through the same bench:
+
+```
+byte index streams (res/elya_moe.bin)  192,170,908 cycles   tokens OK
+W16 index streams  (res/elya_brain_w16.bin) 142,961,833     tokens OK
+input-major wff2   (res/elya_brain_wff2t.bin) 131,766,162   tokens OK
+```
+The byte-index figure is 6,672 cycles (0.003%) from the 192,177,580 the
+earlier work recorded for the same legacy A/B — a third independent
+confirmation that this instrument is the old instrument.
+
+Flag bit4 is only honoured when bit3 (W16) is also set, so a blob that
+predates this change cannot accidentally select the transposed path.
+
+**Real game ROM, not the bench.** `res/resources.res` switched to
+`elya_brain_wff2t.bin` and the full cartridge rebuilt: **2,359,296 bytes,
+unchanged** — the +1.10% blob growth disappears into the existing
+128 KB-alignment padding, so this costs nothing on the cart.
+
+`tools/mame/real_rom_check.py` (new) boots that cartridge in MAME, presses
+P1 A on the emulated pad and samples `lastTok` as `genCount` advances:
+
+```
+frames=7598 ntok=32
+text='Call me Sophia Elya, your guide.'
+```
+First 24 tokens == the gate, character for character. `eg_init` accepted
+the new blob on hardware-representative code and she still answers.
+
+---
+
+## [6] VERDICT
+
+The lever is **real and it ships**. It was scoped out once on a risk
+judgement; the judgement was wrong, though not by much.
+
+| | |
+|---|---|
+| estimated | ~8.5% |
+| **measured** | **7.83%** (142,961,833 -> 131,766,162, 1.0850x) |
+| tokens | byte-identical, all 24, every run |
+| old blobs | still load, on 68000, byte-identical |
+| cart cost | 0 bytes (blob +1.10%, ROM unchanged at 2,359,296) |
+
+Running total for the port: **220,579,814 -> 131,766,162 = 1.674x**,
+1.32 -> 2.21 tok/s on a real NTSC Genesis.
+
+The estimate was high by 0.7 points for a reason worth writing down: it
+counted the reads removed and not the reads made more expensive. Skipping
+zeros is not free on a 68000 — inverting a matvec turns a *load* from a
+scattered address into a *read-modify-write* to one, 26 cycles instead of
+14, and that tax lands on every weight that survives. 56.5% of the reads
+went away; only 38.8% of the cycles did.
+
+### Not done / known follow-ups
+- The per-column prologue (header read, zero test, then a separate 4x-unroll
+  setup for the add list and again for the sub list) measures out at roughly
+  166 cycles on a live column, ~1.4M per run, ~1% of runtime. Merging the two
+  prologues or hoisting a per-column offset table are plausible sub-1% levers.
+  Both are new levers, not this one, and neither has been measured.
+- Only `wff2` is transposed. `wff1`'s *outputs* are 55.8% ReLU-zeroed too,
+  and computing them is pure waste — but the sign is not knowable before the
+  dot product, so there is no cheap skip there.
+- Not run on real Genesis hardware; MAME 0.277 is the instrument throughout.
