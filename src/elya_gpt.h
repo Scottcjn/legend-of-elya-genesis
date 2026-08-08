@@ -13,6 +13,20 @@
  *     u16 M, u8 S, u8 pad, then 2-bit packed weights [out][in] MSB-first
  *     codes: 00=0 01=+1 10=-1 11=reserved (tetranary +/-2 extension)
  *   explut: u16[256]  Q14 of exp(-i/16)
+ *
+ * Weight-layout flags (SGT1 byte 12, SGTM u16 at 14). The engine picks the
+ * layout at RUNTIME, so one binary reads every generation of blob:
+ *   bit1 0x02  index streams instead of 2-bit packed weights
+ *   bit2 0x04  a positional-encoding table follows the embedding
+ *   bit3 0x08  W16: indices are pre-doubled big-endian u16 BYTE OFFSETS
+ *   bit4 0x10  wff2 is stored INPUT-MAJOR (transposed): 4*embed input
+ *              COLUMNS instead of embed output rows, each listing the
+ *              outputs that input feeds as a pre-quadrupled byte offset
+ *              into an int32 accumulator array. Lets the kernel skip an
+ *              input ReLU zeroed without reading its weights at all
+ *              (55.8% of them). Only meaningful with bit3, and ignored
+ *              without it, so older blobs cannot select it by accident.
+ *              Converter: host/sgtm_wff2_transpose.py
  */
 #ifndef ELYA_GPT_H
 #define ELYA_GPT_H

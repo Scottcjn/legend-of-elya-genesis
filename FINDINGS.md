@@ -269,3 +269,40 @@ went away; only 38.8% of the cycles did.
   and computing them is pure waste — but the sign is not knowable before the
   dot product, so there is no cheap skip there.
 - Not run on real Genesis hardware; MAME 0.277 is the instrument throughout.
+
+---
+
+## [7] Final verification pass
+
+Every check re-run from clean on the shipped tree.
+
+**x86**, three compilers' worth of scrutiny, all three blob generations:
+```
+gcc -O2 -Wall -Wextra   byte-index / W16 / input-major -> gate, all three
+clang -O2               input-major                    -> gate
+gcc -fsanitize=address,undefined  input-major and W16  -> gate, no diagnostics
+```
+ASan/UBSan matters here specifically: the transposed stream drives a
+*write* to a scattered address (`s_facc[]`) where the old path only ever
+read one, so an off-by-one in the exporter would corrupt memory rather
+than just compute the wrong number. Clean.
+
+**68000**, clean rebuild, ROM md5 recorded, 3 runs each:
+```
+elya_brain_w16.bin    rom 7548488243edd0bfd75d0e8367ed26a6  142,961,833
+elya_brain_wff2t.bin  rom 89009690c5fc3010d43e93b3a61c2396  131,766,162
+```
+Identical md5s to the measurement run, so the numbers above are the
+numbers this tree produces.
+
+**Shipped cartridge**, 3 runs: `Call me Sophia Elya, you` — 24 tokens,
+byte-identical to the gate, every run.
+
+One instrument bug found and fixed while doing this, worth recording
+because it is the same class as the stale resource: `real_rom_check.py`
+originally pressed P1 A once at a hard-coded frame. That worked, then
+silently collected *zero* tokens on a later run of the *same ROM* — the
+press landed while the intro still owned input. It now taps A every 400
+frames until `genCount` actually moves, and finds the "P1 A" field by
+searching the ioport map instead of assuming `:MD1_3B`. A check that can
+report nothing and look like a failing ROM is worse than no check.

@@ -27,25 +27,39 @@ local sp  = mac.devices[":maincpu"].spaces["program"]
 -- exactly like a hung ROM.
 KEEP = {}
 
-local frame, last_gc, out, pressed = 0, -1, {}, false
+local frame, last_gc, out, started = 0, -1, {}, false
+
+-- Find P1 A wherever the driver put it: the pad in slot 1 may be the
+-- 3-button or the 6-button port depending on the ctrl1 default.
+local btn = nil
+for _, port in pairs(mac.ioport.ports) do
+  for _, f in pairs(port.fields) do
+    if f.name == "P1 A" then btn = f end
+  end
+end
+if btn == nil then
+  local f = io.open(CFG.out, "w"); f:write("ok=0\nerr=no P1 A field\n"); f:close()
+  mac:exit()
+end
 
 KEEP[#KEEP+1] = emu.add_machine_frame_notifier(function()
   frame = frame + 1
-  -- let the intro run, then hold P1 A for a few frames
-  if frame > CFG.press and frame <= CFG.press + 8 then
-    if not pressed then
-      mac.ioport.ports[":MD1_3B"]:field("P1 A"):set_value(1)
-      pressed = true
-    end
-  elseif pressed and frame > CFG.press + 8 then
-    mac.ioport.ports[":MD1_3B"]:field("P1 A"):set_value(0)
-    pressed = false
+  -- The intro plays first and its length is not something this script
+  -- should have to know. Tap A every CFG.press frames until generation
+  -- actually starts; a single timed press was fragile and produced one
+  -- run that collected nothing at all.
+  if not started then
+    local ph = frame % CFG.press
+    btn:set_value((ph >= 1 and ph <= 6) and 1 or 0)
+  else
+    btn:set_value(0)
   end
 
   local gc = sp:read_u16(CFG.gencount)
   if gc ~= last_gc then
-    if gc > 0 and gc <= CFG.ntok then
-      out[#out+1] = sp:read_u8(CFG.lasttok)
+    if gc > 0 then
+      started = true
+      if #out < CFG.ntok then out[#out+1] = sp:read_u8(CFG.lasttok) end
     end
     last_gc = gc
   end
@@ -65,7 +79,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("rom_dir", nargs="?", default=".")
     ap.add_argument("--tokens", type=int, default=24)
-    ap.add_argument("--press", type=int, default=1200)
+    ap.add_argument("--press", type=int, default=400)
     ap.add_argument("--limit", type=int, default=40000)
     ap.add_argument("--seconds", type=int, default=900)
     a = ap.parse_args()
