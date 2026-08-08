@@ -105,3 +105,97 @@ placement differs by a few instructions), so every A/B below is quoted
 against **142,973,233**, this instrument's own baseline, measured today.
 The task's 142,972,761 is reproduced closely enough to say the instrument
 is the same instrument.
+
+---
+
+## [3] A FALSE NULL — the first transposed build measured -0.008%
+
+Recorded because it nearly ended this task with the wrong answer.
+
+The first transposed run came back at 142,961,833 against a 142,973,233
+baseline: **-0.008%**, i.e. nothing. The generated 68000 code was exactly
+the intended `move.w (a0)+,d7 / add.l d2,(a1,d7.w) / dbra`, and the token
+gate passed, so the obvious reading was "the lever is dead".
+
+It was not. SGDK's `makefile.gen` never includes its generated dependency
+files (`#-include $(DEPS)` is commented out), so changing `res/model.bin`
+does **not** invalidate `out/res/bench.o`. The ROM had the NEW engine and
+the OLD blob. With the W16 blob loaded the flag is clear, so the engine
+took the ordinary output-major path — and 142,961,833 is simply what the
+old path costs once the new code is linked in beside it (-11,400 cycles of
+incidental code-layout noise against the earlier 142,973,233).
+
+`EXTRA_FLAGS` is untracked the same way. Both traps are now closed:
+`bench/Makefile` deletes the resource objects on every build and prints the
+model md5, and `bench/ab.sh` starts every measurement from `make clean` and
+prints the md5 of both `res/model.bin` and `out/rom.bin`.
+
+The lesson is the project's own hard rule pointed the other way for once:
+the measurement was real, the *thing measured* was not what the log said.
+
+---
+
+## [4] MEASURED: input-major `wff2` is 7.83% faster
+
+Clean A/B. Identical engine binary, two blobs, full rebuild each,
+`out/rom.bin` md5 recorded, 3 runs each, 1 distinct cycle count each.
+
+```
+$ bench/ab.sh -- res/elya_brain_w16.bin res/elya_brain_wff2t.bin
+=== elya_brain_w16.bin ===
+bench model: 17fed3d34b29fa6b08935ad0f7a8bd36  res/model.bin
+rom md5    : 7548488243edd0bfd75d0e8367ed26a6
+cycles=142961833   REPRODUCIBLE cycles: True (1 distinct)  tokens: True
+=== elya_brain_wff2t.bin ===
+bench model: 1b5635b8804b739c30d6344891aff17a  res/model.bin
+rom md5    : 89009690c5fc3010d43e93b3a61c2396
+cycles=131766162   REPRODUCIBLE cycles: True (1 distinct)  tokens: True
+```
+
+| | cycles | / token | tok/s |
+|---|---|---|---|
+| output-major `wff2` (shipped W16) | 142,961,833 | 3,762,154 | 2.039 |
+| **input-major `wff2`** | **131,766,162** | **3,467,531** | **2.212** |
+
+**-11,195,671 cycles = -7.83%, 1.0850x.**
+Against the task's stated 142,972,761 baseline: **-7.84%**, same 1.0850x.
+Against the original 220,579,814: **1.674x** (was 1.543x).
+
+(The tok/s at the baseline reads 2.039 rather than the documented 1.96
+because the documented figure divided by 38 passes at 3,762,441 cyc; same
+number, quoted here from this instrument's own baseline.)
+
+### Where the 7.83% comes from — measured, not modelled
+
+`EG_DOUBLE_WFF2` runs the `wff2` matvec twice with a memory barrier
+between. Same result, so tokens do not move; the cycle delta is the exact
+cost of one `wff2` pass in whichever layout is loaded.
+
+```
+output-major: 172,072,029 - 142,961,833 = 29,110,196 cycles  (20.4% of the run)
+input-major : 149,580,007 - 131,766,162 = 17,813,845 cycles  (13.5% of the run)
+                                          -----------
+                                          11,296,351 removed = 38.8% of wff2
+```
+That 11,296,351 accounts for the 11,195,671 measured end-to-end saving to
+within 0.9%, so nothing else moved: the win is entirely `wff2`.
+
+Cycles per surviving nonzero-weight read, all per-row/per-column overhead
+included:
+
+```
+output-major:  29,110,196 / 833,758 reads = 34.9 cyc/read
+input-major :  17,813,845 / 363,084 reads = 49.1 cyc/read
+```
+
+**This is the whole story in one line.** 56.5% of the weight reads were
+removed, but only 38.8% of the cycles, because the surviving reads cost
+**41% more each**. The transposed step is a read-modify-write into a
+scattered accumulator (`move.w (a0)+,d1 / add.l d0,(a1,d1.w)` = 8 + 26 =
+34 cycles) where the output-major step is a read from a scattered input
+(`move.w (a2)+,d0 / move.w (a5,d0.w),a1 / add.l a1,acc` = 8 + 14 + 8 = 30),
+and the input-major loop additionally pays a header read, a zero test and a
+branch on all 19,456 columns per run instead of on 4,864 rows.
+
+The estimate said ~8.5%. The measurement says **7.83%** — the estimate was
+good, and slightly optimistic by exactly the amount the indirection costs.
