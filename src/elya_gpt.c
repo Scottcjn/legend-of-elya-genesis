@@ -673,6 +673,18 @@ static void eg_layer(EgState *st, int16_t li, int16_t slot, int16_t n_ctx)
         eg_matvec_t(&st->wff2[li], s_ff, s_proj, EG_FFN, EG_EMBED);
     else
         eg_matvec(&st->wff2[li], s_ff, s_proj, EG_FFN, EG_EMBED);
+#ifdef EG_DOUBLE_WFF2
+    /* MEASUREMENT ONLY. Run the same wff2 matvec a second time; the
+     * result is identical so the tokens do not move, and the cycle delta
+     * against the un-doubled build is the exact cost of one wff2 pass.
+     * The barrier stops GCC dead-storing the first call away. */
+    __asm__ volatile ("" ::: "memory");
+    if (eg_wff2_t)
+        eg_matvec_t(&st->wff2[li], s_ff, s_proj, EG_FFN, EG_EMBED);
+    else
+        eg_matvec(&st->wff2[li], s_ff, s_proj, EG_FFN, EG_EMBED);
+    __asm__ volatile ("" ::: "memory");
+#endif
     for (int16_t i = 0; i < EG_EMBED; i++)
         x[i] = sat16((int32_t)s_res[i] + s_proj[i]);
 }
