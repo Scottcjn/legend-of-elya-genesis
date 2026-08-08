@@ -12,3 +12,7 @@ res/resources.h
 res/resources.rs
 __pycache__/
 *.pyc
+bench/out/
+bench/src/boot/
+bench/res/*.bin
+bench/res/bench.h

@@ -79,3 +79,29 @@ baseline): 18.68% x 68% = **~12.7% if skipping were free**. It is not
 free — the transposed loop pays a read-modify-write to a scattered
 accumulator instead of a read from a scattered input — so the previous
 agent's ~8.5% is a plausible target, not an obviously wrong one.
+
+---
+
+## [2] Instrument rebuilt and re-validated
+
+`bench/` did not survive; rebuilt in-tree so it cannot be lost again.
+`bench/src/` symlinks the real `src/elya_gpt.c`, `elya_gpt.h` and
+`elya_router.h`; `bench/src/bench_main.c` is the headless shell (display
+off, interrupts off, no polling, fixed 24 tokens, no early stop).
+`bench/res/model.bin` is the blob under test — swap that file to A/B a
+format with a byte-identical engine binary.
+
+```
+$ cd bench && make build
+$ python3 tools/mame/bench_run.py bench --repeat 3
+cycles=142973233   x3, 1 distinct
+tokens=Call me Sophia Elya, you   expert=1
+REPRODUCIBLE cycles: True   REPRODUCIBLE tokens: True
+```
+
+**142,973,233** against the documented **142,972,761** — 472 cycles apart,
+0.0003%. The shell is a rebuild, not the original binary (the progress-mark
+placement differs by a few instructions), so every A/B below is quoted
+against **142,973,233**, this instrument's own baseline, measured today.
+The task's 142,972,761 is reproduced closely enough to say the instrument
+is the same instrument.
