@@ -27,3 +27,55 @@ router expert 1.
   `gcc -O2 -o /tmp/harness host/harness.c src/elya_gpt.c`
   `EG_SHOW_EXPERT=1 /tmp/harness res/elya_brain_w16.bin "Who are you?: " 24`
   -> `expert=1`, `Call me Sophia Elya, you`. Instrument chain starts here.
+
+---
+
+## [1] PREMISE RE-MEASURED — both numbers hold
+
+Two instruments, both new in this branch:
+
+- `host/blob_stats.py` — walks the SGTM index streams and counts nonzero
+  ternary weights per tensor (static; each tensor is read exactly once per
+  layer per forward pass, so this IS the per-pass weight budget).
+- `host/host_bench.c` + an `#ifdef EG_STATS` block in `src/elya_gpt.c` —
+  runs the identical 38-pass bench loop on x86 and counts, at runtime,
+  how many `s_ff` elements ReLU zeroed and how many of `wff2`'s weight
+  reads landed on one of them. The stats block compiles out entirely when
+  `EG_STATS` is not defined, so no timed build is affected.
+
+```
+$ python3 host/blob_stats.py res/elya_brain_w16.bin 1
+expert 1: 66297 nonzero weights per forward pass
+  wq      5568   8.40%      wff1   22357  33.72%
+  wk      5562   8.39%      wff2   21941  33.10%
+  wv      5395   8.14%
+  wo      5474   8.26%
+
+$ gcc -O2 -DEG_STATS -o host_bench_stats host/host_bench.c src/elya_gpt.c
+$ ./host_bench_stats res/elya_brain_w16.bin
+text=Call me Sophia Elya, you
+=== 38 forward passes (14 prompt + 24 generated) ===
+s_ff elements after ReLU : 19456
+  of which ZERO          : 10863  (55.83%)
+wff2 nonzero-weight reads: 833758
+  hitting a ZERO input   : 470674  (56.45%)
+ALL tensors' reads       : 2519286
+  wff2 share of all      : 33.10%
+  skippable / all reads  : 18.68%
+```
+
+**Both premise numbers hold to the decimal.** ReLU zero fraction
+**55.83%** (claimed 55.8%); `wff2` share of nonzero weights **33.10%**
+(claimed ~33%).
+
+One number the premise did not have, and it is the one that matters:
+**56.45% of `wff2`'s weight READS hit a zero input** — very slightly
+higher than the raw 55.83% element fraction, i.e. the zeros are not
+adversarially placed against the weight distribution. That makes
+**18.68% of every nonzero-weight read in the whole engine skippable**.
+
+Ceiling check against the profiler (matvec ~68% of runtime at this
+baseline): 18.68% x 68% = **~12.7% if skipping were free**. It is not
+free — the transposed loop pays a read-modify-write to a scattered
+accumulator instead of a read from a scattered input — so the previous
+agent's ~8.5% is a plausible target, not an obviously wrong one.

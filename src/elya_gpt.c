@@ -302,6 +302,62 @@ if (eg_streams == 2) {
 }
 }
 
+/* ---- measurement-only instrumentation ---------------------------------
+ * Compiled out entirely unless EG_STATS is defined, so the ROM and every
+ * timed build are bit-identical with or without this block present. It
+ * exists to answer one question with data instead of a guess: how much of
+ * wff2's weight stream reads an input that ReLU already zeroed? */
+#ifdef EG_STATS
+#include <stdio.h>
+uint32_t eg_st_ff_total, eg_st_ff_zero;       /* s_ff elements after ReLU */
+uint32_t eg_st_w_reads, eg_st_w_zeroin;       /* wff2 weight reads        */
+uint32_t eg_st_rows, eg_st_rows_all;          /* wff2 rows / all rows     */
+uint32_t eg_st_all_reads;                     /* every tensor's reads     */
+
+/* Walk an index-stream tensor without doing arithmetic; count how many of
+ * its nonzero-weight reads land on a zero element of `in`. */
+static void eg_stat_scan(const EgTensor *t, const int16_t *in,
+                         int16_t out_dim, int is_wff2)
+{
+    const uint8_t *p = t->packed;
+    for (int16_t o = 0; o < out_dim; o++) {
+        uint16_t na = rd16be(p); p += 2;
+        uint16_t ns = rd16be(p); p += 2;
+        uint32_t n = (uint32_t)na + ns;
+        eg_st_rows_all++;
+        if (is_wff2) eg_st_rows++;
+        for (uint32_t i = 0; i < n; i++) {
+            uint16_t ix;
+            if (eg_streams == 2) { ix = (uint16_t)(rd16be(p) >> 1); p += 2; }
+            else                 { ix = *p++; }
+            eg_st_all_reads++;
+            if (is_wff2) {
+                eg_st_w_reads++;
+                if (in[ix] == 0) eg_st_w_zeroin++;
+            }
+        }
+    }
+}
+
+void eg_stats_report(const char *what)
+{
+    printf("=== %s ===\n", what);
+    printf("s_ff elements after ReLU : %u\n", eg_st_ff_total);
+    printf("  of which ZERO          : %u  (%.2f%%)\n", eg_st_ff_zero,
+           100.0 * eg_st_ff_zero / (eg_st_ff_total ? eg_st_ff_total : 1));
+    printf("wff2 nonzero-weight reads: %u\n", eg_st_w_reads);
+    printf("  hitting a ZERO input   : %u  (%.2f%%)\n", eg_st_w_zeroin,
+           100.0 * eg_st_w_zeroin / (eg_st_w_reads ? eg_st_w_reads : 1));
+    printf("ALL tensors' reads       : %u\n", eg_st_all_reads);
+    printf("  wff2 share of all      : %.2f%%\n",
+           100.0 * eg_st_w_reads / (eg_st_all_reads ? eg_st_all_reads : 1));
+    printf("  skippable / all reads  : %.2f%%\n",
+           100.0 * eg_st_w_zeroin / (eg_st_all_reads ? eg_st_all_reads : 1));
+    printf("wff2 output rows         : %u  (all tensors: %u)\n",
+           eg_st_rows, eg_st_rows_all);
+}
+#endif
+
 /* ---- RMS norm, parameter-free, all int -------------------------------- */
 static void eg_rmsnorm(int16_t *x, int16_t n)
 {
@@ -350,6 +406,11 @@ static void eg_layer(EgState *st, int16_t li, int16_t slot, int16_t n_ctx)
     memcpy(s_res, x, sizeof(s_res));
     eg_rmsnorm(x, EG_EMBED);
 
+#ifdef EG_STATS
+    eg_stat_scan(&st->wq[li], x, EG_EMBED, 0);
+    eg_stat_scan(&st->wk[li], x, EG_EMBED, 0);
+    eg_stat_scan(&st->wv[li], x, EG_EMBED, 0);
+#endif
     eg_matvec(&st->wq[li], x, s_q, EG_EMBED, EG_EMBED);
     eg_matvec(&st->wk[li], x, s_k, EG_EMBED, EG_EMBED);
     eg_matvec(&st->wv[li], x, s_v, EG_EMBED, EG_EMBED);
@@ -453,6 +514,9 @@ static void eg_layer(EgState *st, int16_t li, int16_t slot, int16_t n_ctx)
         }
     }
 
+#ifdef EG_STATS
+    eg_stat_scan(&st->wo[li], s_attn, EG_EMBED, 0);
+#endif
     eg_matvec(&st->wo[li], s_attn, s_proj, EG_EMBED, EG_EMBED);
     for (int16_t i = 0; i < EG_EMBED; i++)
         x[i] = sat16((int32_t)s_res[i] + s_proj[i]);
@@ -460,9 +524,19 @@ static void eg_layer(EgState *st, int16_t li, int16_t slot, int16_t n_ctx)
     /* FFN */
     memcpy(s_res, x, sizeof(s_res));
     eg_rmsnorm(x, EG_EMBED);
+#ifdef EG_STATS
+    eg_stat_scan(&st->wff1[li], x, EG_FFN, 0);
+#endif
     eg_matvec(&st->wff1[li], x, s_ff, EG_EMBED, EG_FFN);
     for (int16_t i = 0; i < EG_FFN; i++)
         if (s_ff[i] < 0) s_ff[i] = 0;              /* ReLU */
+#ifdef EG_STATS
+    for (int16_t i = 0; i < EG_FFN; i++) {
+        eg_st_ff_total++;
+        if (s_ff[i] == 0) eg_st_ff_zero++;
+    }
+    eg_stat_scan(&st->wff2[li], s_ff, EG_EMBED, 1);
+#endif
     eg_matvec(&st->wff2[li], s_ff, s_proj, EG_FFN, EG_EMBED);
     for (int16_t i = 0; i < EG_EMBED; i++)
         x[i] = sat16((int32_t)s_res[i] + s_proj[i]);
