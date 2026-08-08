@@ -282,3 +282,68 @@ genesis/host/sgtm_to_w16.py  blob converter
 genesis/res/elya_brain_w16.bin  converted model
 host_bench.c               x86 mirror of the bench loop (token oracle)
 ```
+
+---
+
+## [13] Input-major (transposed) `wff2` — the last scoped-out lever, measured
+
+Full journal: `FINDINGS.md` (this section is the summary).
+
+The one remaining idea from the SPEED_PLAN was a transposed `wff2` weight
+stream that skips ReLU zeros. It had been scoped out on a risk judgement —
+a second blob-format change plus a new code path — and never measured.
+
+Premise re-measured first, on the current model (`host/blob_stats.py`, and
+an `#ifdef EG_STATS` block in the engine that compiles out entirely):
+ - **55.83%** of `s_ff` is zero after ReLU (claim: 55.8%)
+ - `wff2` is **33.10%** of all nonzero weights (claim: ~33%)
+ - **56.45%** of `wff2`'s weight READS land on one of those zeros, i.e.
+   **18.68% of every nonzero-weight read in the whole engine is skippable**
+
+Format: flags **bit4 (0x10)**, defined on top of bit3 (W16). `wff2` is
+stored as 256 input COLUMNS instead of 64 output rows; each column lists
+the output slots that input feeds, as a pre-quadrupled byte offset into an
+int32 accumulator array. Converter `host/sgtm_wff2_transpose.py` (+1.10%
+blob). Bit4 is ignored without bit3, so every existing blob still loads —
+confirmed on 68000, not just x86.
+
+| | cycles | / token | tok/s |
+|---|---|---|---|
+| 14 | output-major `wff2` (W16) | 142,961,833 | 3,762,154 | 2.04 |
+| 15 | **input-major `wff2`** | **131,766,162** | **3,467,531** | **2.21** |
+
+**-7.83%, 1.0850x. Tokens byte-identical on all 24.**
+Running total **220,579,814 -> 131,766,162 = 1.674x**.
+
+Attributed with an `EG_DOUBLE_WFF2` build (runs the same matvec twice
+behind a memory barrier; the delta is the exact cost of one pass):
+`wff2` was **29,110,196** cycles (20.4% of the run) and is now
+**17,813,845** (13.5%) — 38.8% of it removed, which accounts for the
+11,195,671 end-to-end saving to within 0.9%.
+
+**Why 38.8% and not 56.5%.** Per surviving read, including all per-row and
+per-column overhead: **34.9 cycles output-major, 49.1 input-major.**
+Inverting a matvec turns a load from a scattered address into a
+read-modify-write to one — `add.l d0,(a1,d1.w)` is 12+14 = 26 cycles where
+`move.w (a5,d0.w),a1` is 14 — and that tax lands on every weight that
+survives. The estimate of ~8.5% counted the reads removed and not the
+reads made more expensive.
+
+Also recorded, because it nearly produced the opposite conclusion: the
+first transposed build measured **-0.008%**. SGDK's `makefile.gen` does not
+include its generated dependency files, so a changed `res/model.bin` does
+not invalidate `out/res/bench.o`; the ROM had the new engine and the old
+blob. `EXTRA_FLAGS` is untracked the same way. `bench/Makefile` now
+force-rebuilds the resource and prints the model md5, and `bench/ab.sh`
+starts every measurement from `make clean` and prints the ROM md5 too.
+
+### Artifacts added
+```
+bench/                          rebuilt in-tree (it had been lost); symlinks the engine
+bench/ab.sh                     clean A/B driver, md5s every ROM it measures
+host/host_bench.c               x86 mirror of the bench loop / token oracle
+host/blob_stats.py              per-tensor nonzero weight census
+host/sgtm_wff2_transpose.py     W16 -> input-major wff2 converter
+tools/mame/real_rom_check.py    boots the SHIPPED cartridge, presses A, reads tokens
+res/elya_brain_wff2t.bin        the converted model (now the shipped blob)
+```

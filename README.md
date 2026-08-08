@@ -90,8 +90,9 @@ day, and the corrections are more useful than the originals:
   |---|---|---|---|
   | before | 220,579,814 | 5,804,732 | 1.32 |
   | after  | 142,972,761 | 3,762,441 | 1.96 |
+  | + input-major `wff2` | 131,766,162 | 3,467,531 | 2.21 |
 
-  That is **1.543x**, not 11.3x, and it is the number to quote. The static
+  That is **1.674x**, not 11.3x, and it is the number to quote. The static
   estimate of 1.7–3x was optimistic but the right order; the x86 figure was
   not. Two further honest caveats: the bench runs with display and
   interrupts off for determinism, so in-game cost is somewhat higher; and
