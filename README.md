@@ -1,5 +1,21 @@
 # ELYA INTO DREAMS
 
+## It runs on real hardware
+
+![Elya generating text on a 1988 Sega Genesis](hardware/real_genesis_screen.jpg)
+
+A Sega Genesis Model 1 from 1988, answering `When were you born?` with
+`March fourteenth, two thousand twenty five.` — generated on the 68000, from
+weights on the cartridge. Cold boot to menu is 13.9 s; generation runs at
+roughly 1.97 tokens/sec (operator-timed).
+
+That is about **12% slower than this repo's emulator figure of 2.21 tok/s**, and
+we do not yet know why. VDP bus contention (+0.29%) and SD read latency are both
+tested and refuted in [FINDINGS.md](FINDINGS.md). It is the first cycle-level
+disagreement between our instrument and silicon on any platform in this project,
+and it is open.
+
+
 **A real transformer running on a Sega Genesis.** Not precomputed text, not
 a lookup table — an integer-only ternary language model doing live inference
 on a Motorola 68000 at 7.67 MHz, with no FPU and no 32-bit multiply, in
