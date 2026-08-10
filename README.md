@@ -4,6 +4,8 @@
 
 ![Elya generating text on a 1988 Sega Genesis](hardware/real_genesis_screen.jpg)
 
+**Video of it running on the real console: https://bottube.ai/watch/7eMzfZw8Z09**
+
 A Sega Genesis Model 1 from 1988, answering `When were you born?` with
 `March fourteenth, two thousand twenty five.` — generated on the 68000, from
 weights on the cartridge. Cold boot to menu is 13.9 s; generation runs at
