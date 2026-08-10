@@ -368,3 +368,52 @@ ROM MAME models; DRAM refresh under-modelled; NTSC 68000 clock differing from
 the assumed 7.67 MHz; or stopwatch error (though ~12% over ~12 s is far outside
 plausible human error). **This is the first cycle-level disagreement between our
 instrument and silicon on any platform, and it is unexplained.**
+
+### 🔴 CORRECTION — the "~12% hardware gap" was NOT a hardware disagreement
+A second recording (41.1 s, 1229 frames @ 30 fps) captured an actual
+generation, and the ROM's own on-screen counter (`src/main.c:754-763`,
+`(genTokens*6000)/elapsed_vblank_frames`) resolves it.
+
+**The game loop runs ONE forward pass per iteration and ends each iteration
+with `SYS_doVBlankProcess()`** (`src/main.c:1000`, "one forward pass per loop"),
+which syncs to vblank. **The displayed rate is therefore quantised to 60/k for
+integer k** — it cannot take intermediate values:
+
+| observed on screen | frames/token | nearest 60/k |
+|---|---|---|
+| **2.00** | 30.00 | **60/30 = 2.000** (exact) |
+| 1.91 | 31.4 | 60/31 = 1.935 |
+| **1.77** | 33.9 | **60/34 = 1.765** |
+
+Every reading is a quantisation step. 2.00 tok/s is not a cap; it is exactly
+30 frames per token.
+
+**Why the game is slower than the bench, and why it is not a silicon mystery:**
+pure inference is 131,766,162 / 38 = 3,467,531 cycles per forward pass =
+**27.13 NTSC frames** (127,833 cycles/frame @ 7.67 MHz). The game shows 30-34.
+The difference is per-token game-loop work the headless bench does not do -
+`putGlyph`, mouth animation, sprite updates, and a `sprintf` + `VDP_drawText`
+for the counter itself - then rounded UP to a whole frame by the vblank sync.
+
+⚠️ **The counter is observer-effect instrumentation: `drawTokSpeed()` runs a
+`sprintf` and a VRAM write per token INSIDE the interval it measures.**
+
+**The emulator and the hardware do not disagree.** The earlier entry compared a
+display-off inference bench against a full game loop with rendering and vblank
+sync - two different things. Hypotheses 1 and 2 above were refuting a gap that
+was an artefact of the comparison, not a property of the console. The bench
+figure stands as a PURE-INFERENCE number; the ~1.77-2.00 tok/s on-screen figure
+stands as the END-TO-END PLAYABLE number. Both are correct and they measure
+different things.
+
+### The model made a coherent wrong prediction — evidence against lookup
+Asked `What is your name?:` the ROM generated
+`Scott, who keeps the thread between sessions.` — fluent, grammatical, topically
+adjacent, and **wrong** (that is the operator's name and role, not the
+character's).
+
+A keyed lookup table returns the stored answer or nothing; it cannot produce a
+fluent, plausible, *related* wrong answer. A semantically-adjacent error is the
+failure signature of distributed learned representations doing real inference.
+Recorded because "it must be a lookup table" is the most common objection this
+work receives.
