@@ -9,11 +9,18 @@ A Sega Genesis Model 1 from 1988, answering `When were you born?` with
 weights on the cartridge. Cold boot to menu is 13.9 s; generation runs at
 roughly 1.97 tokens/sec (operator-timed).
 
-That is about **12% slower than this repo's emulator figure of 2.21 tok/s**, and
-we do not yet know why. VDP bus contention (+0.29%) and SD read latency are both
-tested and refuted in [FINDINGS.md](FINDINGS.md). It is the first cycle-level
-disagreement between our instrument and silicon on any platform in this project,
-and it is open.
+The ROM counts its own vblanks, so that figure comes from the console itself.
+It is quantised to 60/k — the game runs one forward pass per loop and syncs to
+vblank — so 2.00 tok/s is exactly 30 frames per token, and 1.77 is 34.
+
+Pure inference is 27.13 frames per forward pass; the rest is the game drawing
+glyphs, animating her mouth, and printing the counter. The headless bench figure
+of 2.21 tok/s and the on-screen 1.77–2.00 are both correct and measure different
+things. See [FINDINGS.md](FINDINGS.md).
+
+Asked `What is your name?` she answered `Scott, who keeps the thread between
+sessions.` — fluent, related, and wrong. A lookup table cannot make that
+mistake.
 
 
 **A real transformer running on a Sega Genesis.** Not precomputed text, not
