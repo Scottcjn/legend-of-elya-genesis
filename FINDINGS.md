@@ -306,3 +306,65 @@ press landed while the intro still owned input. It now taps A every 400
 frames until `genCount` actually moves, and finds the "P1 A" field by
 searching the ioport map instead of assuming `:MD1_3B`. A check that can
 report nothing and look like a failing ROM is worse than no check.
+
+---
+
+## 2026-08-10 — FIRST REAL HARDWARE CONFIRMATION (Sega Genesis Model 1, 1988)
+
+Everything in this journal before this entry was measured under MAME. This
+entry is silicon.
+
+**Hardware:** Sega Genesis Model 1 (1988), Mega EverDrive, `ELYA_TRANSFORMER.BIN`
+md5 `a0e4d679b06a7b09cfb29c8cf12ac64d`, built from `f1a1ff0`.
+
+**It works.** The cartridge boots, renders, and generates. Photographed
+answering `When were you born?:` with `March fourteenth, two thousand twenty
+five.` (`hardware/real_genesis_1988_generating.jpg`).
+
+### Measured on hardware
+| quantity | value | how |
+|---|---|---|
+| cold boot -> menu | **13.9 s** | video, 413 frames @ 29.67 fps |
+| generation rate | **~1.97 tok/s** | **stopwatch, operator-timed** |
+
+⚠️ **The 1.97 figure is a stopwatch measurement, not frame-derived.** The
+captured video covers boot -> intro -> title -> menu and stops at the prompt; it
+does not contain a generation. A frame-accurate rate needs ~20 s of video
+starting immediately before the prompt is answered. Recorded as operator-timed
+until then.
+
+### The disagreement with the emulator
+| | tok/s | s/token |
+|---|---|---|
+| MAME, published | 2.21 | 0.452 |
+| real Genesis | **~1.97** | **~0.508** |
+
+**Hardware is ~12% slower than this harness reports.**
+
+### Hypothesis 1 — VDP bus contention: REFUTED
+The bench disables display and interrupts for determinism
+(`bench/src/bench_main.c:44`, `VDP_setEnable(FALSE)`), so the obvious
+explanation was that the published number never paid for VDP fetches or the
+VBlank IRQ. Added `BENCH_DISPLAY_ON` to test it.
+
+| arm | cycles | delta |
+|---|---|---|
+| display OFF (published) | 131,766,162 | -- |
+| display ON + interrupts live | 132,145,914 | **+0.29%** |
+
+ROM md5 differs between arms and reproduces (`89009690...` off,
+`c67c7a4a...` on), so the flag is real and this is not another false null.
+**VDP contention costs 0.29% in MAME and cannot account for ~12%.**
+
+### Hypothesis 2 — SD-card read latency: REFUTED
+`hardware/everdrive_flashing_rom.jpg` shows the EverDrive's
+`ROM type: MD / erase... / copy...` sequence: the ROM is written into the
+cart's **onboard flash** before running. It is not streamed from SD during
+execution, so SD latency is not in the path.
+
+### Still open
+Remaining candidates, none tested: EverDrive flash access timing vs the mask
+ROM MAME models; DRAM refresh under-modelled; NTSC 68000 clock differing from
+the assumed 7.67 MHz; or stopwatch error (though ~12% over ~12 s is far outside
+plausible human error). **This is the first cycle-level disagreement between our
+instrument and silicon on any platform, and it is unexplained.**

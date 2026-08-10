@@ -39,9 +39,19 @@ static EgState elya;
 
 int main(void)
 {
-    /* Kill every source of bus contention and timing jitter. */
+    /* Kill every source of bus contention and timing jitter.
+     *
+     * BENCH_DISPLAY_ON reverses this: display enabled and interrupts live, so
+     * the VDP fetches and the VBlank IRQ contend for the 68000 bus exactly as
+     * they do on a real console. Real 1988 Model 1 hardware measured 1.97
+     * tok/s against this harness's 2.21 display-off figure; this build exists
+     * to test whether VDP contention accounts for the gap. */
+#ifdef BENCH_DISPLAY_ON
+    VDP_setEnable(TRUE);
+#else
     SYS_disableInts();
     VDP_setEnable(FALSE);
+#endif
 
     bench_status = 0;
     bench_ntok   = 0;
