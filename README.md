@@ -1,5 +1,7 @@
 # ELYA INTO DREAMS
 
+> **Part of [Transformers on Retro Game Consoles](https://hackaday.io/project/206401-transformers-on-retro-game-consoles)** on Hackaday.io — build logs, corrections, and the sibling NES / SNES / Genesis / N64 / Game Boy Color ports.
+
 ## It runs on real hardware
 
 ![Elya generating text on a 1988 Sega Genesis](hardware/real_genesis_screen.jpg)
